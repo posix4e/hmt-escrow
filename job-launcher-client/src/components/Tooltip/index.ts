@@ -1,1 +1,0 @@
-export { TooltipWhite } from './Tooltip';

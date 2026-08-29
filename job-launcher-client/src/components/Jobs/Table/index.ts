@@ -1,1 +1,0 @@
-export { TableDataGrid } from './Table';
