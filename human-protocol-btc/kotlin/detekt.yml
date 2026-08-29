@@ -1,0 +1,28 @@
+# Complexity budget: mirrors btc-swift's "every function at seven decision
+# paths or under, enforced in CI". The per-FUNCTION caps are the hard rule;
+# class-level function counts are relaxed for API facades (splitting them
+# fragments the public surface without reducing any function's complexity).
+complexity:
+  CyclomaticComplexMethod:
+    active: true
+    threshold: 7
+  LongMethod:
+    active: true
+    threshold: 60
+  LongParameterList:
+    active: true
+    functionThreshold: 7
+    constructorThreshold: 8
+  TooManyFunctions:
+    thresholdInClasses: 25
+    thresholdInObjects: 25
+
+style:
+  MagicNumber:
+    active: false
+  ReturnCount:
+    active: false
+  # Policy checkers throw one violation per rule; a single aggregated throw
+  # would obscure which rule refused the signature.
+  ThrowsCount:
+    max: 6

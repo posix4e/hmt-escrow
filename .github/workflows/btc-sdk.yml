@@ -1,0 +1,62 @@
+name: btc-sdk
+
+on:
+  push:
+    paths:
+      - "human-protocol-btc/**"
+      - ".github/workflows/btc-sdk.yml"
+  pull_request:
+    paths:
+      - "human-protocol-btc/**"
+      - ".github/workflows/btc-sdk.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install nostr-relay (test relay)
+        run: pip install --user nostr-relay
+
+      - name: Install Bitcoin Core 29.0 (pinned)
+        run: |
+          curl -fsSLO https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz
+          echo "a681e4f6ce524c338a105f214613605bac6c33d58c31dc5135bbc02bc458bb6c  bitcoin-29.0-x86_64-linux-gnu.tar.gz" | sha256sum -c -
+          tar xzf bitcoin-29.0-x86_64-linux-gnu.tar.gz
+          sudo install bitcoin-29.0/bin/bitcoind bitcoin-29.0/bin/bitcoin-cli /usr/local/bin/
+
+      # detekt enforces the complexity budget (cyclomatic <= 7 per function);
+      # :engine/:protocol tests are process-free units (incl. the NIP-44 and
+      # protocol vector corpora); :harness spawns bitcoind + a nostr relay and
+      # runs the integration suites and the e2e round-trip variants (incl. the
+      # Android-portable core driving a full job).
+      - name: Gates, unit, integration, e2e
+        working-directory: human-protocol-btc/kotlin
+        run: gradle --no-daemon detekt test
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # The Compose shell over :androidcore (composite build into ../kotlin).
+      - name: Assemble debug APK
+        working-directory: human-protocol-btc/android
+        run: gradle --no-daemon :app:assembleDebug
