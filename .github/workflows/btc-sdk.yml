@@ -2,13 +2,7 @@ name: btc-sdk
 
 on:
   push:
-    paths:
-      - "human-protocol-btc/**"
-      - ".github/workflows/btc-sdk.yml"
   pull_request:
-    paths:
-      - "human-protocol-btc/**"
-      - ".github/workflows/btc-sdk.yml"
 
 jobs:
   test:
@@ -40,7 +34,7 @@ jobs:
       # runs the integration suites and the e2e round-trip variants (incl. the
       # Android-portable core driving a full job).
       - name: Gates, unit, integration, e2e
-        working-directory: human-protocol-btc/kotlin
+        working-directory: kotlin
         run: gradle --no-daemon detekt test
 
   android:
@@ -58,5 +52,5 @@ jobs:
 
       # The Compose shell over :androidcore (composite build into ../kotlin).
       - name: Assemble debug APK
-        working-directory: human-protocol-btc/android
+        working-directory: android
         run: gradle --no-daemon :app:assembleDebug

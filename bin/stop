@@ -1,4 +1,0 @@
-#!/bin/sh -ex
-set -ex
-docker-compose stop -t 2
-yes | docker-compose rm
