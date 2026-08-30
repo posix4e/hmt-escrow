@@ -6,14 +6,36 @@ plugins {
 
 android {
     namespace = "org.hpb.app"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.hpb.app"
         minSdk = 28 // ChaCha20 (NIP-44) needs API 28+
-        targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        targetSdk = 35 // Play requires 35+ for new apps/updates since 2025-08
+        // the release workflow feeds these from the run number and tag
+        versionCode = (System.getenv("HPB_VERSION_CODE") ?: "1").toInt()
+        versionName = System.getenv("HPB_VERSION_NAME") ?: "0.1.0"
+    }
+
+    // Store uploads are signed with the CI keystore (env-provided); local
+    // and PR builds see no keystore and stay unsigned.
+    val releaseKeystore = System.getenv("ANDROID_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 
     buildFeatures {

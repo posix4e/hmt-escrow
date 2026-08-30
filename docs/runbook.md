@@ -117,3 +117,45 @@ gradle detekt test        # everything: gates, units, integration, both e2e vari
 
 Requires `bitcoind` (v26+) on PATH and the `nostr-relay` Python package
 (`pip install --user nostr-relay`).
+
+## Shipping to the stores
+
+`release.yml` ships both apps to the test tracks — iOS to TestFlight,
+Android to the Play internal track. Cut a release by pushing a version
+tag (`git tag v0.2.0 && git push origin v0.2.0`) or running the workflow
+manually; a `dry_run` dispatch builds everything unsigned and uploads
+nothing, so the pipeline works before any store credentials exist.
+Build numbers are the CI run number plus 100 (so the hand-uploaded
+bootstrap bundle's versionCode 1 never collides); the version name comes
+from the tag.
+
+One-time store setup:
+
+- **Apple**: register the App ID `org.hpb.labeler`, create the app in
+  App Store Connect, an Apple Distribution certificate, an App Store
+  provisioning profile for that App ID, and an App Store Connect API key
+  (App Manager role).
+- **Google**: create the Play app for `org.hpb.app`, upload the FIRST
+  bundle by hand in the Play console (Google requires it before API
+  uploads work), and give a service account the release-manager role.
+
+Secrets go in a GitHub **environment named `release`** (Settings →
+Environments), not plain repository secrets — both jobs declare
+`environment: release`, so the environment's protections (required
+reviewers, deployment tag rules) gate every run that can touch the
+signing material:
+
+| secret | contents |
+| --- | --- |
+| `APPLE_TEAM_ID` | 10-char team id |
+| `IOS_DIST_CERT_P12_BASE64` | Apple Distribution cert + key, p12, base64 |
+| `IOS_DIST_CERT_PASSWORD` | the p12 passphrase |
+| `IOS_PROVISIONING_PROFILE_BASE64` | App Store profile for org.hpb.labeler, base64 |
+| `APP_STORE_CONNECT_ISSUER_ID` | ASC API issuer id |
+| `APP_STORE_CONNECT_KEY_ID` | ASC API key id |
+| `APP_STORE_CONNECT_API_KEY` | the .p8 contents |
+| `ANDROID_KEYSTORE_BASE64` | upload keystore, base64 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore password |
+| `ANDROID_KEY_ALIAS` | key alias |
+| `ANDROID_KEY_PASSWORD` | key password |
+| `PLAY_SERVICE_ACCOUNT_JSON` | service-account JSON |
