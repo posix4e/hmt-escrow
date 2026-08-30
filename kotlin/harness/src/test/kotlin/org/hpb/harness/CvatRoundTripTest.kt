@@ -1,10 +1,14 @@
 package org.hpb.harness
 
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.net.Socket
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
+import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
@@ -145,6 +149,50 @@ class CvatRoundTripTest {
         )
         check(response.statusCode() == 200) { "POST $path -> ${response.statusCode()}: ${response.body()}" }
     }
+
+    @Test
+    fun labelerServesPhonesOnAConfiguredLanBind() {
+        // a phone can't reach 127.0.0.1 on the workstation: the operator
+        // binds the LAN address and the phone opens that URL
+        val lan = lanAddress()
+        val phoneApp = LabelerApp(
+            WorkerSession(OkRelayClient(listOf(relay.url)), ByteArray(32).also { it[31] = 0x22 }),
+            network = "regtest",
+            bind = lan,
+        ).also { it.start() }
+        try {
+            val page = http.send(
+                HttpRequest.newBuilder(URI.create(phoneApp.url)).GET().build(),
+                HttpResponse.BodyHandlers.ofString(),
+            )
+            assertEquals(200, page.statusCode())
+            assertTrue("hpb labeler" in page.body())
+            // the phone's requests carry Host: <bind> — the origin gate
+            // passes (this claim then fails past the gate, on the fake job)
+            assertTrue("unknown job" in rawClaim(lan, phoneApp.port, host = lan))
+            // a DNS-rebound page carries its own hostname — still refused
+            assertTrue("bad Host header" in rawClaim(lan, phoneApp.port, host = "evil.example"))
+        } finally {
+            phoneApp.stop()
+        }
+    }
+
+    /** Raw socket because HttpClient refuses to forge the Host header. */
+    private fun rawClaim(address: String, port: Int, host: String): String =
+        Socket(address, port).use { socket ->
+            val body = """{"escrowId":"x","address":"y"}"""
+            socket.getOutputStream().write(
+                ("POST /api/claim HTTP/1.1\r\nHost: $host\r\nX-Labeler: 1\r\n" +
+                    "Content-Length: ${body.length}\r\nConnection: close\r\n\r\n$body").toByteArray(),
+            )
+            socket.getInputStream().readBytes().decodeToString()
+        }
+
+    private fun lanAddress(): String = Collections.list(NetworkInterface.getNetworkInterfaces())
+        .filter { it.isUp && !it.isLoopback }
+        .flatMap { Collections.list(it.inetAddresses) }
+        .filterIsInstance<Inet4Address>()
+        .first().hostAddress
 
     @Test
     fun mutatingApiRefusesForeignOrigins() {

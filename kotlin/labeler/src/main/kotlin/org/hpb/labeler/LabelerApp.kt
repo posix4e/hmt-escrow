@@ -30,16 +30,19 @@ class LabelerApp(
     private val worker: WorkerSession,
     port: Int = 0,
     private val network: String = "",
+    private val bind: String = "127.0.0.1",
 ) {
-    private val server = HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
+    private val server = HttpServer.create(InetSocketAddress(bind, port), 0)
     private val jobs = ConcurrentHashMap<String, WorkerSession.JobRow>()
 
     val port: Int get() = server.address.port
-    val url: String get() = "http://127.0.0.1:$port/"
+    val url: String get() = "http://$bind:$port/"
 
     init {
         server.executor = Executors.newCachedThreadPool()
         server.createContext("/") { handle(it) { _ -> page() } }
+        server.createContext("/manifest.json") { handle(it) { _ -> manifest() } }
+        server.createContext("/icon.png") { handle(it) { _ -> icon() } }
         server.createContext("/api/state") { handle(it) { _ -> state() } }
         server.createContext("/api/claim") { handle(it, mutating = true, ::claim) }
         server.createContext("/api/submit") { handle(it, mutating = true, ::submit) }
@@ -58,22 +61,25 @@ class LabelerApp(
             if (mutating) checkSameOrigin(exchange)
             val body = exchange.requestBody.readBytes().decodeToString()
             action(if (body.isBlank()) JsonObject(emptyMap()) else Json.parseToJsonElement(body).jsonObject)
-        }.getOrElse { Response(500, it.message ?: "error", "text/plain") }
+        }.getOrElse { text(500, it.message ?: "error") }
         exchange.responseHeaders.add("Content-Type", response.contentType)
-        val bytes = response.body.toByteArray()
-        exchange.sendResponseHeaders(response.code, bytes.size.toLong())
-        exchange.responseBody.use { it.write(bytes) }
+        exchange.sendResponseHeaders(response.code, response.body.size.toLong())
+        exchange.responseBody.use { it.write(response.body) }
     }
 
-    private data class Response(val code: Int, val body: String, val contentType: String)
+    private data class Response(val code: Int, val body: ByteArray, val contentType: String)
+
+    private fun text(code: Int, body: String, contentType: String = "text/plain"): Response =
+        Response(code, body.toByteArray(), contentType)
 
     /** The claim/submit endpoints drive this process's key, so they must be
      *  unreachable from other web origins: the custom header forces a CORS
      *  preflight no cross-origin page can pass (we never answer preflights),
-     *  and the Host check stops DNS-rebinding at the front door. */
+     *  and the Host check — loopback or the exact address the operator chose
+     *  to bind — stops DNS-rebinding at the front door. */
     private fun checkSameOrigin(exchange: HttpExchange) {
         val host = exchange.requestHeaders.getFirst("Host").orEmpty().substringBefore(':')
-        require(host == "127.0.0.1" || host == "localhost") { "bad Host header" }
+        require(host == "127.0.0.1" || host == "localhost" || host == bind) { "bad Host header" }
         require(exchange.requestHeaders.getFirst("X-Labeler") == "1") {
             "missing X-Labeler header — use the labeler page"
         }
@@ -81,9 +87,20 @@ class LabelerApp(
 
     private fun page(): Response = Response(
         200,
-        checkNotNull(javaClass.getResourceAsStream("/labeler.html")).readBytes().decodeToString(),
+        checkNotNull(javaClass.getResourceAsStream("/labeler.html")).readBytes(),
         "text/html; charset=utf-8",
     )
+
+    /** Installable on phones: Add to Home Screen gives a standalone app. */
+    private fun manifest(): Response = text(
+        200,
+        """{"name":"hpb labeler","short_name":"labeler","start_url":"/","display":"standalone",""" +
+            """"background_color":"#101418","theme_color":"#101418",""" +
+            """"icons":[{"src":"/icon.png","sizes":"180x180","type":"image/png"}]}""",
+        "application/json",
+    )
+
+    private fun icon(): Response = Response(200, iconPng(), "image/png")
 
     /** One aggregate: open jobs (with MY assignment status) + my earnings. */
     private fun state(): Response {
@@ -164,7 +181,26 @@ class LabelerApp(
     }
 
     private fun json(payload: JsonObject): Response =
-        Response(200, payload.toString(), "application/json")
+        text(200, payload.toString(), "application/json")
+
+    private fun iconPng(): ByteArray {
+        val image = java.awt.image.BufferedImage(180, 180, java.awt.image.BufferedImage.TYPE_INT_RGB)
+        val g = image.createGraphics()
+        g.setRenderingHint(
+            java.awt.RenderingHints.KEY_TEXT_ANTIALIASING,
+            java.awt.RenderingHints.VALUE_TEXT_ANTIALIAS_ON,
+        )
+        g.color = java.awt.Color(0x10, 0x14, 0x18)
+        g.fillRect(0, 0, 180, 180)
+        g.color = java.awt.Color(0xF7, 0x93, 0x1A)
+        g.font = java.awt.Font(java.awt.Font.SANS_SERIF, java.awt.Font.BOLD, 58)
+        val width = g.fontMetrics.stringWidth("hpb")
+        g.drawString("hpb", (180 - width) / 2, 111)
+        g.dispose()
+        val out = java.io.ByteArrayOutputStream()
+        javax.imageio.ImageIO.write(image, "png", out)
+        return out.toByteArray()
+    }
 }
 
 fun main() {
@@ -174,6 +210,9 @@ fun main() {
         WorkerSession(OkRelayClient(relays), persistentKey()),
         port,
         network = System.getenv("HPB_NETWORK") ?: "SIGNET",
+        // to label from a phone, bind the workstation's LAN address and open
+        // that URL on the phone — mutating calls accept exactly that Host
+        bind = System.getenv("HPB_LABELER_BIND") ?: "127.0.0.1",
     )
     app.start()
     println("labeler at ${app.url}")

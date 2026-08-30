@@ -33,7 +33,10 @@ The short version:
 - [`kotlin/`](kotlin/) — the reference implementation (engine, protocol,
   roles, headless daemon, test harness, android core)
 - [`kotlin/labeler/`](kotlin/labeler/) — a miniature labeling web app: the
-  worker side of the protocol as one page (claim, label, submit, get paid)
+  worker side of the protocol as one page (claim, label, submit, get paid).
+  Installable on phones: run it with `HPB_LABELER_BIND=<your LAN IP>`, open
+  that URL on the phone, and on iOS Share → Add to Home Screen gives a
+  standalone full-screen app
 - [`kotlin/cvat/`](kotlin/cvat/) — the CVAT bridge: export a CVAT task's
   frames to the network as a paid labeling job, import the validated labels
   back as CVAT annotations (see [`docs/runbook.md`](docs/runbook.md))
