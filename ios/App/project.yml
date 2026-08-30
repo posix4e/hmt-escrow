@@ -1,0 +1,43 @@
+# XcodeGen spec — the .xcodeproj is generated, not checked in:
+#   brew install xcodegen && xcodegen generate
+name: HpbLabeler
+options:
+  bundleIdPrefix: org.hpb
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  HpbCore:
+    path: ../HpbCore
+targets:
+  HpbLabeler:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: HpbCore
+    settings:
+      base:
+        CODE_SIGNING_ALLOWED: "NO"
+        SWIFT_VERSION: "5.9"
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: hpb labeler
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        # Relays are user-configured and often plain ws:// (a LAN or
+        # self-hosted relay); prefer wss:// where available.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    scheme:
+      testTargets: [HpbLabelerUITests]
+  HpbLabelerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: HpbLabeler
+    settings:
+      base:
+        CODE_SIGNING_ALLOWED: "NO"
+        SWIFT_VERSION: "5.9"
