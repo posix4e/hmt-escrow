@@ -60,6 +60,10 @@ cd kotlin
 # a worker's labeling page at http://127.0.0.1:7677
 HPB_RELAYS=wss://your-relay.example gradle :labeler:run
 
+# to label from a phone: bind the workstation's LAN address, open that URL
+# on the phone (same network), then Add to Home Screen
+HPB_LABELER_BIND=192.168.1.20 HPB_RELAYS=wss://your-relay.example gradle :labeler:run
+
 # the launcher side: export CVAT task 42, collect labels, pay, import
 CVAT_URL=https://cvat.example CVAT_TOKEN=... CVAT_TASK_ID=42 \
 HPB_RELAYS=wss://your-relay.example gradle :cvat:run
