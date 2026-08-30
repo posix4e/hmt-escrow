@@ -8,6 +8,8 @@ dependencies {
     implementation(project(":roles"))
     implementation(project(":headless"))
     implementation(project(":androidcore"))
+    implementation(project(":labeler"))
+    implementation(project(":cvat"))
 
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")

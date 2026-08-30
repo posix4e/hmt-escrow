@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hpb labeler</title>
+<style>
+  :root {
+    --bg: #101418; --panel: #1a2129; --panel2: #212a34; --line: #2c3742;
+    --text: #e8edf2; --dim: #93a1af; --accent: #f7931a; --ok: #2ecc71;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 22px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  header h1 span { color: var(--accent); }
+  .net { font-size: 12px; color: var(--dim); border: 1px solid var(--line);
+         padding: 2px 9px; border-radius: 99px; }
+  .who { margin-left: auto; font-size: 12px; color: var(--dim); }
+  main { max-width: 760px; margin: 0 auto; padding: 22px; }
+  .addr { display: flex; gap: 8px; margin-bottom: 18px; }
+  .addr input { flex: 1; background: var(--panel); color: var(--text);
+                border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px;
+                font: 13px ui-monospace, monospace; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 26px 0 10px; }
+  .job { background: var(--panel); border: 1px solid var(--line);
+         border-radius: 12px; padding: 16px 18px; margin-bottom: 14px; }
+  .job-head { display: flex; align-items: baseline; gap: 10px; }
+  .job-head b { font-size: 15px; }
+  .reward { color: var(--accent); font-weight: 650; }
+  .pill { font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+          padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line);
+          color: var(--dim); margin-left: auto; }
+  .pill.active { color: var(--accent); border-color: var(--accent); }
+  .pill.validated, .pill.paid { color: var(--ok); border-color: var(--ok); }
+  button { background: var(--accent); color: #14100a; font-weight: 650;
+           border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer;
+           font-size: 14px; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: var(--panel2); color: var(--text);
+                 border: 1px solid var(--line); font-weight: 500; }
+  button.ghost.sel { border-color: var(--accent); color: var(--accent);
+                     background: rgba(247,147,26,.12); font-weight: 650; }
+  .task { background: var(--panel2); border: 1px solid var(--line);
+          border-radius: 10px; padding: 14px; margin-top: 12px; }
+  .task img { display: block; max-width: 200px; border-radius: 8px;
+              margin-bottom: 10px; background: #fff; }
+  .task p { margin: 0 0 10px; }
+  .choices { display: flex; gap: 8px; flex-wrap: wrap; }
+  .task input[type=text] { width: 100%; background: var(--bg); color: var(--text);
+        border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; }
+  .bar { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .muted { color: var(--dim); font-size: 13px; }
+  .earn { display: flex; gap: 10px; align-items: baseline; padding: 10px 0;
+          border-bottom: 1px solid var(--line); font-size: 14px; }
+  .earn code { color: var(--dim); font-size: 12px; overflow-wrap: anywhere; }
+  .earn b { color: var(--ok); white-space: nowrap; }
+  #total { color: var(--ok); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>&#8383;</span> hpb labeler</h1>
+  <span class="net" id="net">nostr + bitcoin</span>
+  <span class="who" id="who"></span>
+</header>
+<main>
+  <div class="addr">
+    <input id="payout" placeholder="your payout address (tb1...)" spellcheck="false">
+  </div>
+  <h2>Jobs</h2>
+  <div id="jobs" class="muted">looking for work on the relays&hellip;</div>
+  <h2>Earnings <span id="total"></span></h2>
+  <div id="earnings" class="muted">nothing yet</div>
+</main>
+<script>
+const picks = {};   // escrowId -> {taskKey: answer}
+let state = null;
+
+function parseQ(question) {
+  try {
+    const q = JSON.parse(question);
+    if (q && (q.text || q.image)) return q;
+  } catch (e) {}
+  return { text: question };
+}
+
+function taskCard(job, task) {
+  const q = parseQ(task.question);
+  const mine = (picks[job.escrowId] || {})[task.key];
+  const div = document.createElement('div');
+  div.className = 'task';
+  if (q.image && /^data:image\//.test(q.image)) {
+    const img = document.createElement('img'); img.src = q.image; div.appendChild(img);
+  }
+  const p = document.createElement('p'); p.textContent = q.text || ''; div.appendChild(p);
+  if (q.choices && q.choices.length) {
+    const row = document.createElement('div'); row.className = 'choices';
+    for (const c of q.choices) {
+      const b = document.createElement('button');
+      b.className = 'ghost' + (mine === c ? ' sel' : '');
+      b.textContent = c;
+      b.onclick = () => { (picks[job.escrowId] ||= {})[task.key] = c; render(); };
+      row.appendChild(b);
+    }
+    div.appendChild(row);
+  } else {
+    const inp = document.createElement('input'); inp.type = 'text';
+    inp.placeholder = 'your answer'; inp.value = mine || '';
+    inp.onchange = () => { (picks[job.escrowId] ||= {})[task.key] = inp.value; };
+    div.appendChild(inp);
+  }
+  return div;
+}
+
+// relay data is untrusted: every relay-derived string is set via
+// textContent, never interpolated into HTML
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function jobCard(job) {
+  const div = el('div', 'job');
+  const head = el('div', 'job-head');
+  head.appendChild(el('b', '', job.jobType));
+  head.appendChild(el('span', 'reward', job.rewardPerTaskSats + ' sats/task'));
+  head.appendChild(el('span', 'muted', job.tasks.length + ' tasks'));
+  head.appendChild(el('span', 'pill ' + (/^[a-z]+$/.test(job.status) ? job.status : ''), job.status));
+  div.appendChild(head);
+
+  if (job.status === 'open') {
+    const bar = el('div', 'bar');
+    const b = el('button', '', 'Claim job');
+    b.onclick = () => api('claim', { escrowId: job.escrowId,
+                                     address: document.getElementById('payout').value.trim() });
+    bar.appendChild(b);
+    bar.appendChild(el('span', 'muted', 'escrow ' + job.escrowId.slice(0, 12) + '…'));
+    div.appendChild(bar);
+  }
+  if (job.status === 'active') {
+    for (const t of job.tasks) div.appendChild(taskCard(job, t));
+    const done = Object.keys(picks[job.escrowId] || {}).length;
+    const bar = document.createElement('div'); bar.className = 'bar';
+    const b = document.createElement('button');
+    b.textContent = 'Submit ' + done + '/' + job.tasks.length + ' labels';
+    b.disabled = done < job.tasks.length;
+    b.onclick = () => api('submit', { escrowId: job.escrowId, answers: picks[job.escrowId] });
+    bar.appendChild(b);
+    div.appendChild(bar);
+  }
+  if (job.status === 'claimed') {
+    div.appendChild(el('div', 'bar muted', 'waiting for the launcher to grant your claim…'));
+  }
+  if (job.status === 'submitted') {
+    div.appendChild(el('div', 'bar muted', 'labels submitted — awaiting validation and payout'));
+  }
+  if (job.status === 'validated') {
+    const bar = el('div', 'bar', 'labels accepted ✓');
+    bar.style.color = 'var(--ok)';
+    div.appendChild(bar);
+  }
+  return div;
+}
+
+function render() {
+  if (!state) return;
+  document.getElementById('who').textContent = 'worker ' + state.pubkey.slice(0, 12) + '…';
+  if (state.network) document.getElementById('net').textContent = state.network;
+  const jobs = document.getElementById('jobs'); jobs.innerHTML = '';
+  if (!state.jobs.length) { jobs.textContent = 'no open jobs on the relays yet'; jobs.className = 'muted'; }
+  else { jobs.className = ''; for (const j of state.jobs) jobs.appendChild(jobCard(j)); }
+  const earn = document.getElementById('earnings');
+  if (state.earnings.length) {
+    earn.className = ''; earn.innerHTML = '';
+    for (const e of state.earnings) {
+      const row = el('div', 'earn');
+      row.appendChild(el('b', '', '+' + e.sats + ' sats'));
+      row.appendChild(el('code', '', 'tx ' + e.txid));
+      earn.appendChild(row);
+    }
+    document.getElementById('total').textContent =
+      '· ' + state.earnings.reduce((a, e) => a + e.sats, 0) + ' sats';
+  }
+}
+
+async function api(path, body) {
+  // the custom header forces a CORS preflight, which no cross-origin page
+  // can pass — only this page can drive the key-holding claim/submit APIs
+  const r = await fetch('/api/' + path, {
+    method: 'POST',
+    headers: { 'X-Labeler': '1' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) alert(await r.text());
+  await refresh();
+}
+
+async function refresh() {
+  try {
+    state = await (await fetch('/api/state')).json();
+    render();
+  } catch (e) {}
+}
+
+document.getElementById('payout').value = localStorage.getItem('payout') || '';
+document.getElementById('payout').onchange = (e) => localStorage.setItem('payout', e.target.value);
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

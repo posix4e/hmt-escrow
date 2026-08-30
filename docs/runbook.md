@@ -46,6 +46,30 @@ unknown kinds — run your own for anything you want to keep.
 mind `minStakeSats` and fund only what the job pays out). The regtest
 harness smoke-tests this exact runner in CI (`DemoRunTest`).
 
+## Labeling with CVAT
+
+The bridge outsources a CVAT task's annotation to the network: each frame
+becomes a job task carrying the image inline plus CVAT's label schema as
+choices, workers label from any client (the `labeler` web app, the Android
+app), and the validated consensus labels come back as CVAT tag annotations
+— CVAT stays the dataset/QA tool, the protocol supplies workers, escrow,
+and payout.
+
+```sh
+cd kotlin
+# a worker's labeling page at http://127.0.0.1:7677
+HPB_RELAYS=wss://your-relay.example gradle :labeler:run
+
+# the launcher side: export CVAT task 42, collect labels, pay, import
+CVAT_URL=https://cvat.example CVAT_TOKEN=... CVAT_TASK_ID=42 \
+HPB_RELAYS=wss://your-relay.example gradle :cvat:run
+```
+
+`HPB_CVAT_WORKERS` sets how many independent labels each frame needs
+(agreement consensus decides the answer). No CVAT deployment handy?
+`gradle :cvat:mock` serves a tiny built-in lookalike (task 1, "animals",
+cat/dog) on :7688 — the default `CVAT_URL`.
+
 ## Serverless (the reference flow)
 
 No servers. Each participant needs: their key, relays, and — for parties

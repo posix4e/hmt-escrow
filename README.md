@@ -32,6 +32,11 @@ The short version:
 
 - [`kotlin/`](kotlin/) — the reference implementation (engine, protocol,
   roles, headless daemon, test harness, android core)
+- [`kotlin/labeler/`](kotlin/labeler/) — a miniature labeling web app: the
+  worker side of the protocol as one page (claim, label, submit, get paid)
+- [`kotlin/cvat/`](kotlin/cvat/) — the CVAT bridge: export a CVAT task's
+  frames to the network as a paid labeling job, import the validated labels
+  back as CVAT annotations (see [`docs/runbook.md`](docs/runbook.md))
 - [`android/`](android/) — the Compose app
 - [`docs/`](docs/) — [`protocol.md`](docs/protocol.md) (the normative
   spec), [`runbook.md`](docs/runbook.md),
