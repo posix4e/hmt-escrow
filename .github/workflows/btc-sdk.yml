@@ -54,3 +54,42 @@ jobs:
       - name: Assemble debug APK
         working-directory: android
         run: gradle --no-daemon :app:assembleDebug
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Swift core must agree with the Kotlin reference byte-for-byte:
+      # both suites regenerate docs/vectors/ and compare.
+      - name: Vector conformance
+        working-directory: ios/HpbCore
+        run: swift test
+
+      - name: Generate the Xcode project
+        working-directory: ios/App
+        run: brew install xcodegen && xcodegen generate
+
+      # Build + drive the whole claim -> label -> submit -> paid flow on the
+      # simulator in --demo mode, attaching a screenshot at each stage.
+      - name: Simulator UI smoke test
+        working-directory: ios/App
+        run: |
+          xcodebuild -project HpbLabeler.xcodeproj -scheme HpbLabeler \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -resultBundlePath TestResults.xcresult test
+
+      - name: Export screenshots
+        if: always()
+        working-directory: ios/App
+        run: |
+          mkdir -p screenshots
+          xcrun xcresulttool export attachments \
+            --path TestResults.xcresult --output-path screenshots || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-screenshots
+          path: ios/App/screenshots

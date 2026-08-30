@@ -41,6 +41,9 @@ The short version:
   frames to the network as a paid labeling job, import the validated labels
   back as CVAT annotations (see [`docs/runbook.md`](docs/runbook.md))
 - [`android/`](android/) — the Compose app
+- [`ios/`](ios/) — the native iOS worker app: SwiftUI over `HpbCore`, a
+  Swift implementation of the worker protocol byte-locked to the same
+  vector corpus as the Kotlin reference
 - [`docs/`](docs/) — [`protocol.md`](docs/protocol.md) (the normative
   spec), [`runbook.md`](docs/runbook.md),
   [`architecture.md`](docs/architecture.md), and the cross-language test
