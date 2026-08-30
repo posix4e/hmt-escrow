@@ -17,12 +17,19 @@ targets:
       - package: HpbCore
     settings:
       base:
+        # tests and PR CI build unsigned; the release workflow overrides
+        # signing and versions on the xcodebuild command line
         CODE_SIGNING_ALLOWED: "NO"
         SWIFT_VERSION: "5.9"
+        PRODUCT_BUNDLE_IDENTIFIER: org.hpb.labeler
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
     info:
       path: Info.plist
       properties:
         CFBundleDisplayName: hpb labeler
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         # Relays are user-configured and often plain ws:// (a LAN or

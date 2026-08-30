@@ -1,0 +1,164 @@
+name: release
+
+# Ships both apps to the store test tracks: iOS -> TestFlight, Android ->
+# Play internal. Runs on version tags (v0.2.0) or manual dispatch; a
+# dry_run dispatch builds everything unsigned and uploads nothing, so the
+# pipeline is testable before any store credentials exist.
+#
+# Required repository secrets (docs/runbook.md "Shipping to the stores"):
+#   ios:     APPLE_TEAM_ID, IOS_DIST_CERT_P12_BASE64, IOS_DIST_CERT_PASSWORD,
+#            IOS_PROVISIONING_PROFILE_BASE64, APP_STORE_CONNECT_ISSUER_ID,
+#            APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_API_KEY
+#   android: ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD,
+#            ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD,
+#            PLAY_SERVICE_ACCOUNT_JSON
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: build unsigned, skip store uploads
+        type: boolean
+        default: false
+
+jobs:
+  ios-testflight:
+    runs-on: macos-15
+    timeout-minutes: 45
+    # store credentials live in the protected "release" environment, so a
+    # pushed tag can't run arbitrary code with the secrets in scope without
+    # the environment's protections (required reviewers, tag rules)
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.$GITHUB_RUN_NUMBER"; fi
+          echo "HPB_VERSION_NAME=$V" >> "$GITHUB_ENV"
+          # offset past the hand-uploaded bootstrap bundle (versionCode 1) —
+          # Play rejects reused version codes
+          echo "HPB_VERSION_CODE=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
+
+      - name: Generate the Xcode project
+        working-directory: ios/App
+        run: brew install xcodegen && xcodegen generate
+
+      - name: Import signing certificate
+        if: ${{ !inputs.dry_run }}
+        uses: apple-actions/import-codesign-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          p12-password: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+
+      - name: Install provisioning profile
+        if: ${{ !inputs.dry_run }}
+        run: |
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          echo "${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}" | base64 -d \
+            > "$HOME/Library/MobileDevice/Provisioning Profiles/hpb-labeler.mobileprovision"
+          PROFILE=$(security cms -D -i "$HOME/Library/MobileDevice/Provisioning Profiles/hpb-labeler.mobileprovision" | plutil -extract Name raw -)
+          echo "HPB_PROFILE=$PROFILE" >> "$GITHUB_ENV"
+
+      - name: Archive (unsigned dry run)
+        if: ${{ inputs.dry_run }}
+        working-directory: ios/App
+        run: |
+          xcodebuild -project HpbLabeler.xcodeproj -scheme HpbLabeler \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/HpbLabeler.xcarchive \
+            MARKETING_VERSION="$HPB_VERSION_NAME" \
+            CURRENT_PROJECT_VERSION="$HPB_VERSION_CODE" \
+            CODE_SIGNING_ALLOWED=NO archive
+
+      - name: Archive (signed)
+        if: ${{ !inputs.dry_run }}
+        working-directory: ios/App
+        run: |
+          xcodebuild -project HpbLabeler.xcodeproj -scheme HpbLabeler \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/HpbLabeler.xcarchive \
+            MARKETING_VERSION="$HPB_VERSION_NAME" \
+            CURRENT_PROJECT_VERSION="$HPB_VERSION_CODE" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            PROVISIONING_PROFILE_SPECIFIER="$HPB_PROFILE" \
+            archive
+
+      - name: Export the ipa
+        if: ${{ !inputs.dry_run }}
+        working-directory: ios/App
+        run: |
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/HpbLabeler.xcarchive \
+            -exportOptionsPlist ExportOptions.plist -exportPath build/export
+
+      - name: Upload to TestFlight
+        if: ${{ !inputs.dry_run }}
+        uses: apple-actions/upload-testflight-build@v3
+        with:
+          app-path: ios/App/build/export/HpbLabeler.ipa
+          issuer-id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          api-private-key: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+
+  android-play:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Version
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then V="${GITHUB_REF_NAME#v}"; else V="0.0.$GITHUB_RUN_NUMBER"; fi
+          echo "HPB_VERSION_NAME=$V" >> "$GITHUB_ENV"
+          # offset past the hand-uploaded bootstrap bundle (versionCode 1) —
+          # Play rejects reused version codes
+          echo "HPB_VERSION_CODE=$((GITHUB_RUN_NUMBER + 100))" >> "$GITHUB_ENV"
+
+      - name: Decode keystore
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > /tmp/release.keystore
+          echo "ANDROID_KEYSTORE_FILE=/tmp/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build the release bundle
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --no-daemon :app:bundleRelease
+
+      - name: Upload to the Play internal track
+        if: ${{ !inputs.dry_run }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: org.hpb.app
+          releaseFiles: android/app/build/outputs/bundle/release/app-release.aab
+          track: internal
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ inputs.dry_run }}
+        with:
+          name: app-release-aab
+          path: android/app/build/outputs/bundle/release/*.aab
