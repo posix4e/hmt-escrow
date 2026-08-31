@@ -58,6 +58,31 @@ class CvatOrg(private val http: CvatHttp) {
             """{"name":"${name.escaped()}","project_id":$projectId}""",
         ).id()
 
+    /** CVAT wants the frames as multipart, and imports them asynchronously. */
+    fun uploadFrames(taskId: Long, frames: List<Pair<String, ByteArray>>) {
+        val parts = Multipart()
+        parts.field("image_quality", "70")
+        parts.field("sorting_method", "lexicographical")
+        frames.forEachIndexed { index, (name, bytes) -> parts.file("client_files[$index]", name, bytes) }
+        http.postBytes("/api/tasks/$taskId/data", parts.body(), parts.contentType)
+    }
+
+    /**
+     * Frames are unfetchable — and the task has no jobs at all — until CVAT
+     * finishes importing them, so provisioning has to wait here.
+     */
+    fun awaitDataReady(taskId: Long, attempts: Int = POLL_ATTEMPTS, intervalMs: Long = POLL_INTERVAL_MS) {
+        val rq = "action%3Dcreate%26target%3Dtask%26target_id%3D$taskId"
+        repeat(attempts) {
+            val status = http.get("/api/requests/$rq").jsonObject
+                .getValue("status").jsonPrimitive.content
+            if (status == "finished") return
+            check(status != "failed") { "cvat failed to import frames for task $taskId" }
+            Thread.sleep(intervalMs)
+        }
+        error("cvat did not finish importing frames for task $taskId")
+    }
+
     /**
      * One project-scoped webhook on `update:job`, matching what production
      * registers. [secret] signs deliveries as `X-Signature-256`; verify it
@@ -151,5 +176,7 @@ class CvatOrg(private val http: CvatHttp) {
     private companion object {
         const val PAGE = 100
         const val SNIPPET = 200
+        const val POLL_ATTEMPTS = 60
+        const val POLL_INTERVAL_MS = 2_000L
     }
 }
