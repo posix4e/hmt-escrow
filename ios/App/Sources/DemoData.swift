@@ -61,7 +61,8 @@ enum DemoData {
 
     private static func task(_ key: String, _ text: String, ears: Ears) -> WorkerStore.TaskModel {
         WorkerStore.TaskModel(
-            key: key, text: text, imageData: pictogram(ears: ears), choices: ["cat", "dog"]
+            key: key, text: text, imageData: pictogram(ears: ears),
+            choices: ["cat", "dog"], work: nil
         )
     }
 
