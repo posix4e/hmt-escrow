@@ -75,6 +75,17 @@ object RealCvat {
         CvatHttp(baseUrl!!, workerToken).get("/api/users/self")
             .jsonObject.getValue("id").jsonPrimitive.long
 
+    /** The worker annotates with its *own* token, as it would in the CVAT UI. */
+    fun annotateJob(workerToken: String, jobId: Long, tags: List<Pair<Int, Long>>) {
+        val rows = tags.joinToString(",") { (frame, labelId) ->
+            """{"frame":$frame,"label_id":$labelId,"group":0,"source":"manual","attributes":[]}"""
+        }
+        CvatHttp(baseUrl!!, workerToken).patch(
+            "/api/jobs/$jobId/annotations/?action=create",
+            """{"version":0,"tags":[$rows],"shapes":[],"tracks":[]}""",
+        )
+    }
+
     /** Test hygiene only — a launcher revokes membership, it never deletes accounts. */
     fun deleteUser(id: Long) {
         http().exchange("DELETE", "/api/users/$id", null)
