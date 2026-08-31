@@ -20,3 +20,14 @@ tasks.register<JavaExec>("mock") {
     mainClass = "org.hpb.cvat.MockCvatKt"
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+// Host a live CVAT job for a human worker:
+//   CVAT_URL=… CVAT_TOKEN=… HPB_RELAYS=… gradle :cvat:liveJob
+tasks.register<JavaExec>("liveJob") {
+    group = "application"
+    description = "Publish one CVAT job and wait for a worker to finish it"
+    mainClass = "org.hpb.cvat.CvatLiveJobKt"
+    classpath = sourceSets["main"].runtimeClasspath
+    standardOutput = System.out
+    environment(System.getenv())
+}

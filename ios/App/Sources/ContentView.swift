@@ -175,6 +175,7 @@ struct ContentView: View {
 
 struct JobCard: View {
     @EnvironmentObject var store: WorkerStore
+    @EnvironmentObject var cvat: CvatStore
     let job: WorkerStore.JobModel
 
     var body: some View {
@@ -212,12 +213,21 @@ struct JobCard: View {
     @ViewBuilder private var content: some View {
         switch job.status {
         case "open":
+            // Claiming CVAT work before signing in strands the job: the
+            // launcher invites by address, and the app has none to send.
+            let needsCvat = job.tasks.contains { $0.work != nil } && !cvat.signedIn
             HStack(spacing: 12) {
                 Button("Claim job") { store.claim(job) }
                     .buttonStyle(AccentButton())
+                    .disabled(needsCvat)
                     .accessibilityIdentifier("claimButton")
                 Text("escrow \(job.escrowId.prefix(12))…")
                     .font(.system(size: 12)).foregroundColor(Palette.dim)
+            }
+            if needsCvat {
+                Text("sign in to CVAT above before claiming this job")
+                    .font(.system(size: 12)).foregroundColor(Palette.dim)
+                    .accessibilityIdentifier("needsCvatSignIn")
             }
         case "active":
             ForEach(job.tasks) { TaskCard(job: job, task: $0) }
@@ -266,13 +276,19 @@ struct TaskCard: View {
             Text(task.text).font(.system(size: 14)).foregroundColor(Palette.text)
             Text("labels: \(work.labels.joined(separator: ", "))")
                 .font(.system(size: 12)).foregroundColor(Palette.dim)
-            if let url = URL(string: work.url) {
+            if store.cvatReady.contains(job.escrowId), let url = URL(string: work.url) {
                 Link("Open in CVAT", destination: url)
                     .buttonStyle(AccentButton())
                     .accessibilityIdentifier("openInCvat")
+                Text("Annotate there, save, then tap “I've finished in CVAT”.")
+                    .font(.system(size: 12)).foregroundColor(Palette.dim)
+            } else {
+                // Opening before the launcher has admitted you gets a bare
+                // permission error from CVAT, which explains nothing.
+                Text("waiting for CVAT access from the launcher…")
+                    .font(.system(size: 12)).foregroundColor(Palette.dim)
+                    .accessibilityIdentifier("awaitingCvatAccess")
             }
-            Text("Annotate there, save, then tap “I've finished in CVAT”.")
-                .font(.system(size: 12)).foregroundColor(Palette.dim)
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(Palette.panel))

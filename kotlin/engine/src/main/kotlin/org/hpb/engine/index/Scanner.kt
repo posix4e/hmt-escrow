@@ -54,6 +54,18 @@ internal class Scanner(private val db: IndexDb, private val rpc: Rpc) {
         null
     }
 
+    /**
+     * Re-examine blocks that were already scanned.
+     *
+     * [sync] only ever moves forward, so a chain fact that concerns an escrow
+     * registered *later* is lost: `applySetup` updates an existing row, and the
+     * row did not exist when its setup transaction went past. A party that
+     * learns about an escrow lazily — a witness handed a co-sign request — must
+     * therefore be able to look again, or it can never see the manifest hash it
+     * is required to check.
+     */
+    fun rescanFrom(height: Int) = rollbackTo(maxOf(height, 0))
+
     private fun rollbackTo(height: Int) {
         db.exec("DELETE FROM blocks WHERE height>=?", height)
         db.exec("DELETE FROM txs WHERE height>=?", height)

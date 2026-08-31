@@ -169,3 +169,19 @@ class CvatLiveJob(
         const val SLUG_SUFFIX_BOUND = 100_000_000L
     }
 }
+
+/**
+ * Host one live CVAT job and wait for a human to work it.
+ *
+ * Raise HPB_MAX_WAIT_MS well above its default: every wait is capped by it,
+ * including the one for a person to finish annotating in a browser.
+ */
+fun main() {
+    val url = System.getenv("CVAT_URL") ?: error("CVAT_URL is required")
+    val token = System.getenv("CVAT_TOKEN") ?: error("CVAT_TOKEN is required")
+    val outcome = CvatLiveJob(CvatOrg(url, token), DemoConfig.fromEnv(), url).run(
+        workersWanted = System.getenv("HPB_CVAT_WORKERS")?.toInt() ?: 1,
+        webhookUrl = System.getenv("HPB_WEBHOOK_URL"),
+    )
+    println("paid in ${outcome.receipt.txid}")
+}

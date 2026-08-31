@@ -20,6 +20,10 @@ class Indexer(private val db: IndexDb, rpc: Rpc) {
 
     fun sync() = scanner.sync()
 
+    /** Forget scanned blocks from [height] so newly registered escrows can
+     *  still pick up chain facts that predate their registration. */
+    fun rescanFrom(height: Int) = scanner.rescanFrom(height)
+
     fun state(escrowId: String): EscrowState {
         sync()
         return reader.state(escrowId)

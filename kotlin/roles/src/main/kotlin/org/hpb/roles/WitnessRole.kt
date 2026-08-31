@@ -95,6 +95,12 @@ class WitnessRole(private val ctx: RoleContext) {
                 announce.cancelDelayBlocks, announce.expiryHeight, ctx.network,
             ),
         )
+        // The setup transaction is already on chain, and the scanner only ever
+        // moves forward — so without looking again this escrow would never
+        // acquire the manifest hash that recomputeExpectedPayout must check,
+        // and every co-sign request for it would be refused.
+        ctx.indexer.rescanFrom(0)
+        ctx.indexer.sync()
     }
 
     private fun replayReservations(escrowId: String) {

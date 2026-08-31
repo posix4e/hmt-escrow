@@ -41,6 +41,11 @@ final class WorkerStore: ObservableObject {
     @Published var picks = [String: [String: String]]()
     @Published var lastError: String?
 
+    /// Escrows this worker has actually been admitted to in CVAT. Until the
+    /// launcher answers the access request there is nothing to open, so the
+    /// card must not pretend otherwise.
+    @Published var cvatReady = Set<String>()
+
     /// The worker's own CVAT session, injected so the launcher never has it.
     var cvat: CvatStore?
 
@@ -116,6 +121,8 @@ final class WorkerStore: ObservableObject {
             ))
         }
         jobs = models.sorted { $0.escrowId < $1.escrowId }
+        let external = jobs.filter { job in job.tasks.contains { $0.work != nil } }
+        if !external.isEmpty { await syncCvatAccess(external) }
         earnings = await session.earnings().map {
             EarningModel(escrowId: $0.escrowId, txid: $0.txid, sats: $0.sats)
         }
@@ -176,12 +183,103 @@ final class WorkerStore: ObservableObject {
                     lastError = "this job requires a KYC badge from an accepted attester"
                     return
                 }
-                try await session.claim(row, payoutAddress: payoutAddress, attestationIds: badges)
+                let claim = try await session.claim(
+                    row, payoutAddress: payoutAddress, attestationIds: badges
+                )
+                try await requestCvatAccess(job, row, claimEventId: claim.id)
                 lastError = nil
                 await refresh()
             } catch {
                 lastError = "claim failed: \(error)"
             }
+        }
+    }
+
+    /// Pick up access grants and join the organization they invite us to.
+    ///
+    /// Accepting is idempotent, and for an account that already existed CVAT
+    /// accepts on creation — so this is usually just bookkeeping that turns the
+    /// "Open in CVAT" button on.
+    private func syncCvatAccess(_ external: [JobModel]) async {
+        guard let relayClient, let privkey, let cvat, !pubkey.isEmpty else { return }
+        await cvat.ensureIdentity()
+        let events = await relayClient.fetch(
+            NostrFilter(kinds: [ProtocolKinds.cvatAccessGrant], pTag: pubkey, limit: 50)
+        )
+        for event in events {
+            guard let grant = try? CvatAccessCodec.parseGrant(event, workerPrivkey: privkey),
+                  !cvatReady.contains(grant.escrowId) else { continue }
+            do {
+                try await cvat.accept(invitationKey: grant.invitationKey)
+                cvatReady.insert(grant.escrowId)
+            } catch {
+                lastError = "CVAT access not usable yet: \(error)"
+            }
+        }
+        for job in external where !cvatReady.contains(job.escrowId) {
+            await ensureAccessRequested(job)
+        }
+    }
+
+    /// Re-send the access request for a job that has none.
+    ///
+    /// Claiming and asking for access are two events, so they can come apart —
+    /// a signed-out CVAT account at claim time, a dropped publish, an app
+    /// updated between the two. Rather than stranding the worker with a job it
+    /// can never open, this notices and asks again.
+    private func ensureAccessRequested(_ job: JobModel) async {
+        guard let relayClient, let row = jobRows[job.escrowId] else { return }
+        let asked = await relayClient.fetch(
+            NostrFilter(
+                kinds: [ProtocolKinds.cvatAccessRequest], authors: [pubkey],
+                xTag: job.escrowId, limit: 10
+            )
+        )
+        guard asked.isEmpty else { return }
+        let claims = await relayClient.fetch(
+            NostrFilter(
+                kinds: [ProtocolKinds.claim], authors: [pubkey],
+                xTag: job.escrowId, limit: 10
+            )
+        )
+        guard let claim = claims.first else { return }
+        do {
+            try await requestCvatAccess(job, row, claimEventId: claim.id)
+        } catch {
+            // Surfaced, not swallowed: a silent failure here strands the worker
+            // on a job it can never open.
+            lastError = "could not ask for CVAT access: \(error)"
+        }
+    }
+
+    /// Ask the launcher to admit this worker's own CVAT account.
+    ///
+    /// Sent alongside the claim rather than inside it: the claim is a closed
+    /// shape in the byte-locked corpus. The address is NIP-44 encrypted to the
+    /// launcher, and it is all the launcher ever learns — the password and
+    /// token stay on this device.
+    private func requestCvatAccess(
+        _ job: JobModel, _ row: WorkerSession.JobRow, claimEventId: String
+    ) async throws {
+        guard job.tasks.contains(where: { $0.work != nil }) else { return }
+        guard let cvat, let privkey, let relayClient else {
+            throw CvatError.http(0, "sign in to CVAT before claiming this job")
+        }
+        guard !cvat.email.isEmpty else {
+            throw CvatError.http(0, "set your CVAT email so the launcher can invite you")
+        }
+        let request = try CvatAccessCodec.request(
+            privkey,
+            launcherPubkey: row.event.pubkey,
+            CvatAccessRequest(
+                claimEventId: claimEventId,
+                escrowId: job.escrowId,
+                cvatEmail: cvat.email
+            ),
+            createdAt: Int64(Date().timeIntervalSince1970)
+        )
+        guard await relayClient.publish(request) else {
+            throw CvatError.http(0, "could not publish the CVAT access request")
         }
     }
 
@@ -199,7 +297,7 @@ final class WorkerStore: ObservableObject {
         guard !external.isEmpty, let cvat, let privkey, let relayClient else { return [] }
         var answers = [Answer]()
         for (task, work) in external {
-            let labels = try await cvat.labels(taskId: work.taskId)
+            let labels = try await cvat.labels(jobId: work.jobId)
             let canonical = try await cvat.canonicalAnnotations(jobId: work.jobId, labels: labels)
             let hash = ExternalWork.hashOf(canonical)
 

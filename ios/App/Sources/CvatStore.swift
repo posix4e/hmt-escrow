@@ -40,10 +40,28 @@ final class CvatStore: ObservableObject {
             let key = try Cj.parse(String(decoding: data, as: UTF8.self)).s("key")
             Keychain.write(Self.tokenKey, key)
             token = key
-            status = "Signed in to CVAT as \(username)"
+            // The launcher invites by address, so take it from CVAT rather than
+            // asking for it again — an address that does not match the account
+            // would be admitted to nothing.
+            try await loadIdentity()
+            status = "Signed in to CVAT as \(username) (\(email))"
         } catch {
             status = "CVAT sign-in failed: \(error)"
         }
+    }
+
+    /// Who this token belongs to, straight from CVAT.
+    func loadIdentity() async throws {
+        let data = try await send("GET", "/api/users/self", body: nil, token: token)
+        let me = try Cj.parse(String(decoding: data, as: UTF8.self))
+        email = (try? me.s("email")) ?? ""
+        username = (try? me.s("username")) ?? username
+    }
+
+    /// Fill in an address for a session restored from the keychain.
+    func ensureIdentity() async {
+        guard signedIn, email.isEmpty else { return }
+        try? await loadIdentity()
     }
 
     func signOut() {
@@ -78,8 +96,10 @@ final class CvatStore: ObservableObject {
         return ExternalWork.canonicalAnnotations(tags)
     }
 
-    func labels(taskId: Int64) async throws -> [Int64: String] {
-        let data = try await send("GET", "/api/labels?task_id=\(taskId)&page_size=100", body: nil, token: token)
+    /// Labels are fetched by *job*, not task: a worker is granted access to the
+    /// job it was assigned, and asking by task_id is refused with 403.
+    func labels(jobId: Int64) async throws -> [Int64: String] {
+        let data = try await send("GET", "/api/labels?job_id=\(jobId)&page_size=100", body: nil, token: token)
         let parsed = try Cj.parse(String(decoding: data, as: UTF8.self))
         var byId: [Int64: String] = [:]
         for row in try parsed.a("results") {
@@ -97,7 +117,7 @@ final class CvatStore: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         token.map { request.setValue("Token \($0)", forHTTPHeaderField: "Authorization") }
         body.map { request.httpBody = Data($0.utf8) }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await Self.session.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(code) else {
             throw CvatError.http(code, String(decoding: data, as: UTF8.self))
@@ -106,6 +126,21 @@ final class CvatStore: ObservableObject {
     }
 
     private static let tokenKey = "cvat.token"
+
+    /// Cookie-free on purpose.
+    ///
+    /// This client authenticates with `Authorization: Token …`. If it also
+    /// carries CVAT's `sessionid`, Django authenticates the *session* instead
+    /// and then rejects every POST without an `X-CSRFToken` — which is what a
+    /// shared URLSession does as soon as it has seen one CVAT response.
+    /// Declining cookies keeps us a token client and sidesteps CSRF entirely.
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpCookieAcceptPolicy = .never
+        config.httpShouldSetCookies = false
+        config.httpCookieStorage = nil
+        return URLSession(configuration: config)
+    }()
 }
 
 enum CvatError: Error {
