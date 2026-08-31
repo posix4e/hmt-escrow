@@ -32,7 +32,11 @@ tasks.register<Test>("realCvatTest") {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     filter { includeTestsMatching("*RealCvat*Test") }
-    listOf("CVAT_URL", "CVAT_TOKEN", "HPB_RELAYS").forEach { name ->
+    listOf(
+        "CVAT_URL", "CVAT_TOKEN", "HPB_RELAYS",
+        "HPB_NETWORK", "HPB_RPC_URL", "HPB_RPC_COOKIE", "HPB_WALLET",
+        "HPB_DEMO_DIR", "HPB_REWARD_SATS", "HPB_POLL_MS", "HPB_MAX_WAIT_MS",
+    ).forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
     outputs.upToDateWhen { false }
