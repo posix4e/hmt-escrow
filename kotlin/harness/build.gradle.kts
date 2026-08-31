@@ -22,3 +22,17 @@ tasks.test {
     // Fail fast with a clear message if bitcoind is missing.
     environment("BITCOIND_EXE", System.getenv("BITCOIND_EXE") ?: "bitcoind")
 }
+
+// Pins CvatClient against a real CVAT server; the mock cannot validate our own
+// API guesses. Needs CVAT_URL and CVAT_TOKEN — see deploy/cvat/README.md.
+tasks.register<Test>("realCvatTest") {
+    description = "Runs the CvatClient conformance test against a real CVAT deployment."
+    group = "verification"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    filter { includeTestsMatching("*RealCvatClientTest") }
+    listOf("CVAT_URL", "CVAT_TOKEN").forEach { name ->
+        System.getenv(name)?.let { environment(name, it) }
+    }
+    outputs.upToDateWhen { false }
+}

@@ -18,6 +18,9 @@ data class CvatLabel(val id: Long, val name: String)
 
 data class CvatTag(val frame: Int, val labelId: Long)
 
+/** A frame's bytes together with the media type CVAT actually served. */
+class CvatFrame(val bytes: ByteArray, val contentType: String)
+
 /**
  * The slice of CVAT's REST API the bridge needs (v2, token auth): read a
  * task's name, label schema, frame count and frame images; append tag
@@ -26,7 +29,12 @@ data class CvatTag(val frame: Int, val labelId: Long)
  */
 class CvatClient(baseUrl: String, private val token: String) {
     private val base = baseUrl.trimEnd('/')
-    private val http = HttpClient.newHttpClient()
+    // HTTP/1.1 is not a preference. The JDK client defaults to HTTP/2 and
+    // negotiates an h2c upgrade, through which CVAT's proxy drops the request
+    // body — every call that carries one (appendTags) then fails with a
+    // "JSON parse error" from an empty body. MockCvat cannot reproduce this:
+    // com.sun.net.httpserver is HTTP/1.1-only, so no upgrade is ever attempted.
+    private val http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
 
     fun taskName(taskId: Long): String =
         get("/api/tasks/$taskId").jsonObject.getValue("name").jsonPrimitive.content
@@ -43,8 +51,13 @@ class CvatClient(baseUrl: String, private val token: String) {
     fun frameCount(taskId: Long): Int =
         get("/api/tasks/$taskId/data/meta").jsonObject.getValue("size").jsonPrimitive.int
 
-    fun frame(taskId: Long, number: Int): ByteArray =
-        raw("/api/tasks/$taskId/data?org=&quality=compressed&type=frame&number=$number")
+    /**
+     * CVAT serves `quality=compressed` frames as JPEG, not PNG, so the media
+     * type is returned alongside the bytes rather than assumed by the caller.
+     */
+    fun frame(taskId: Long, number: Int): CvatFrame =
+        exchange("GET", "/api/tasks/$taskId/data?org=&quality=compressed&type=frame&number=$number", null)
+            .let { CvatFrame(it.body(), it.headers().firstValue("Content-Type").orElse("image/jpeg")) }
 
     /** PATCH ?action=create — appends tags without touching existing work. */
     fun appendTags(taskId: Long, tags: List<CvatTag>) {
@@ -73,9 +86,10 @@ class CvatClient(baseUrl: String, private val token: String) {
 
     private fun get(path: String) = Json.parseToJsonElement(request("GET", path, null).decodeToString())
 
-    private fun raw(path: String): ByteArray = request("GET", path, null)
+    private fun request(method: String, path: String, body: String?): ByteArray =
+        exchange(method, path, body).body()
 
-    private fun request(method: String, path: String, body: String?): ByteArray {
+    private fun exchange(method: String, path: String, body: String?): HttpResponse<ByteArray> {
         val builder = HttpRequest.newBuilder(URI.create(base + path))
             .header("Authorization", "Token $token")
             .header("Content-Type", "application/json")
@@ -84,6 +98,6 @@ class CvatClient(baseUrl: String, private val token: String) {
         check(response.statusCode() in 200..299) {
             "CVAT $method $path -> HTTP ${response.statusCode()}: ${response.body().decodeToString().take(200)}"
         }
-        return response.body()
+        return response
     }
 }
