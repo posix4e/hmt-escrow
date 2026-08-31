@@ -52,11 +52,16 @@ class CvatRecordingRole(private val client: CvatClient, private val labelsById: 
         ): Map<Pair<String, String>, String> =
             first.filter { (key, value) -> second[key] == value }
 
-        /** The rows validation should run over, once the answers are pulled. */
+        /**
+         * The rows validation should run over, once the answers are pulled.
+         * [commitments] are the workers' own public hashes — the authority a
+         * witness re-checks, so nothing is accepted that they do not cover.
+         */
         fun resolve(
             submitted: List<Validators.Submitted>,
             pulled: Map<Pair<String, String>, String>,
-        ): List<Validators.Submitted> = ExternalWork.substitute(submitted, pulled)
+            commitments: Map<Pair<String, String>, String>,
+        ): List<Validators.Submitted> = ExternalWork.substitute(submitted, pulled, commitments)
     }
 }
 

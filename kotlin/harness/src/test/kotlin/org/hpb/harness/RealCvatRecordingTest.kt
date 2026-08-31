@@ -70,23 +70,33 @@ class RealCvatRecordingTest {
 
         assertHonestSubstitution(taskKey, canonical)
         assertTamperingIsRejected(taskKey, canonical)
+        assertUncommittedWorkIsNotPaid(taskKey, canonical)
         assertGroundtruthPays(taskKey, canonical)
         assertRecordersMustAgree(recorder, jobId, taskKey, pulled)
     }
 
-    /** The worker's committed hash matches, so the pulled answer stands in. */
+    /** The worker's public commitment matches, so the pulled answer stands in. */
     private fun assertHonestSubstitution(taskKey: String, canonical: String) {
         val submitted = listOf(Validators.Submitted(taskKey, worker, commitment(canonical)))
-        val resolved = ExternalWork.substitute(submitted, mapOf((worker to taskKey) to canonical))
+        val committed = mapOf((worker to taskKey) to ExternalWork.hashOf(canonical))
+        val resolved = ExternalWork.substitute(submitted, mapOf((worker to taskKey) to canonical), committed)
         assertEquals(listOf(Validators.Submitted(taskKey, worker, canonical)), resolved)
+    }
+
+    /** With no public commitment there is nothing a witness could check. */
+    private fun assertUncommittedWorkIsNotPaid(taskKey: String, canonical: String) {
+        val submitted = listOf(Validators.Submitted(taskKey, worker, commitment(canonical)))
+        val resolved = ExternalWork.substitute(submitted, mapOf((worker to taskKey) to canonical), emptyMap())
+        assertTrue(resolved.isEmpty(), "work with no public commitment was accepted")
     }
 
     /** A launcher that edits CVAT after submission cannot get the edit paid. */
     private fun assertTamperingIsRejected(taskKey: String, canonical: String) {
         val submitted = listOf(Validators.Submitted(taskKey, worker, commitment(canonical)))
+        val committed = mapOf((worker to taskKey) to ExternalWork.hashOf(canonical))
         val tampered = canonical.replace("circle", "square")
         assertTrue(tampered != canonical, "tamper fixture did not change anything")
-        val resolved = ExternalWork.substitute(submitted, mapOf((worker to taskKey) to tampered))
+        val resolved = ExternalWork.substitute(submitted, mapOf((worker to taskKey) to tampered), committed)
         assertTrue(resolved.isEmpty(), "annotations that do not match the commitment were accepted")
     }
 

@@ -13,6 +13,8 @@ import org.hpb.protocol.Records
 import org.hpb.protocol.SignRequest
 import org.hpb.protocol.SignResponse
 import org.hpb.protocol.Validations
+import org.hpb.protocol.CvatCommitments
+import org.hpb.protocol.ExternalWork
 import org.hpb.protocol.Validators
 
 /**
@@ -130,6 +132,24 @@ class WitnessRole(private val ctx: RoleContext) {
         ).maxByOrNull { it.createdAt } ?: error("no reveal for ${request.escrowId}")
         val results = Validations.fromEvent(reveal)
 
+        // Work done in another tool is only as trustworthy as the worker's own
+        // public commitment: the launcher administers CVAT, so without this it
+        // could reveal annotations the worker never made. Submissions are
+        // encrypted to the launcher and unreadable here, which is exactly why
+        // the commitment is a separate public event.
+        val commitments = CvatCommitments.index(
+            ctx.nostr.fetch(
+                NostrFilter(
+                    kinds = listOf(ProtocolKinds.CVAT_COMMITMENT),
+                    xTag = request.escrowId,
+                    limit = FETCH_LIMIT,
+                ),
+            ),
+        )
+        check(ExternalWork.revealMatchesCommitments(results.rows, commitments)) {
+            "reveal contains annotations the worker never committed to"
+        }
+
         val submitted = results.rows.map { Validators.Submitted(it.taskKey, it.worker, it.answer) }
         // grant-scoping re-checked from public events: a reveal with
         // duplicate or ungranted rows would inflate the payout list
@@ -157,5 +177,9 @@ class WitnessRole(private val ctx: RoleContext) {
             it.pubkey to org.hpb.protocol.Assignments.parseClaim(it).payoutAddress
         }
         return { worker -> claims.getValue(worker) }
+    }
+
+    private companion object {
+        const val FETCH_LIMIT = 500
     }
 }
