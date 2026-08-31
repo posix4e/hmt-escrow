@@ -58,13 +58,14 @@ class CvatBridge(
         if (frames < total) log("NOTE: exporting only $frames of $total frames (limit)")
         log("cvat task '$name': exporting $frames frames, labels ${labels.map { it.name }}")
         return (0 until frames).map { n ->
-            val image = Base64.getEncoder().encodeToString(cvat.frame(taskId, n))
+            val frame = cvat.frame(taskId, n)
+            val image = Base64.getEncoder().encodeToString(frame.bytes)
             Task(
                 key = "frame-$n",
                 question = JsonObject(
                     mapOf(
                         "text" to JsonPrimitive("Label frame $n of \"$name\""),
-                        "image" to JsonPrimitive("data:image/png;base64,$image"),
+                        "image" to JsonPrimitive("data:${frame.contentType};base64,$image"),
                         "choices" to JsonArray(labels.map { JsonPrimitive(it.name) }),
                     ),
                 ).toString(),
