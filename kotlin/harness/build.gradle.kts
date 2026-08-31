@@ -30,7 +30,7 @@ tasks.register<Test>("realCvatTest") {
     group = "verification"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
-    filter { includeTestsMatching("*RealCvatClientTest") }
+    filter { includeTestsMatching("*RealCvat*Test") }
     listOf("CVAT_URL", "CVAT_TOKEN").forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
