@@ -112,4 +112,32 @@ object ExternalWork {
 
     fun annotationsHash(tags: List<Pair<Int, String>>): String =
         sha256(canonicalAnnotations(tags).toByteArray()).hex()
+
+    fun hashOf(canonical: String): String = sha256(canonical.toByteArray()).hex()
+
+    /**
+     * Swap each worker's completion assertion for the annotations someone
+     * actually pulled — but only where those annotations hash to what the
+     * worker committed to at submission time.
+     *
+     * This is what lets validation stay mechanical once the answers live in
+     * another system. A witness has no CVAT access and cannot fetch anything,
+     * yet it can re-run this over the reveal and the submissions alone: a
+     * launcher cannot invent an answer, because the bytes must hash to a
+     * commitment the worker signed before the launcher saw them. A row whose
+     * hash disagrees is dropped rather than guessed at — unverifiable work is
+     * not paid, and neither is work someone tampered with afterwards.
+     *
+     * Rows that are not completion assertions pass through untouched, so
+     * ordinary inline tasks are unaffected.
+     */
+    fun substitute(
+        submitted: List<Validators.Submitted>,
+        pulled: Map<Pair<String, String>, String>,
+    ): List<Validators.Submitted> = submitted.mapNotNull { row ->
+        val completion = completion(row.answer) ?: return@mapNotNull row
+        val canonical = pulled[row.worker to row.taskKey] ?: return@mapNotNull null
+        if (hashOf(canonical) != completion.annotationsSha256) return@mapNotNull null
+        row.copy(answer = canonical)
+    }
 }

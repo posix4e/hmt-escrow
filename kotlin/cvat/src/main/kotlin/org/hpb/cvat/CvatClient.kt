@@ -76,6 +76,20 @@ class CvatClient(private val http: CvatHttp) {
                 )
             }
 
+    /**
+     * Tags on one CVAT job — the unit a worker is actually assigned, and so the
+     * unit a recording role reads back. The trailing slash is required: Django
+     * would answer a redirect otherwise, and this client does not follow them.
+     */
+    fun jobTags(jobId: Long): List<CvatTag> =
+        http.get("/api/jobs/$jobId/annotations/").jsonObject
+            .getValue("tags").jsonArray.map {
+                CvatTag(
+                    it.jsonObject.getValue("frame").jsonPrimitive.int,
+                    it.jsonObject.getValue("label_id").jsonPrimitive.long,
+                )
+            }
+
     private fun tagJson(tag: CvatTag) = JsonObject(
         mapOf(
             "frame" to JsonPrimitive(tag.frame),
