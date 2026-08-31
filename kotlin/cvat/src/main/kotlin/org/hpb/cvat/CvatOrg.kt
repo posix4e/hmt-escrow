@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,8 +22,19 @@ import kotlinx.serialization.json.long
  */
 data class CvatInvitation(val key: String, val username: String, val userId: Long, val accepted: Boolean)
 
-/** A CVAT job — the unit of assignment one protocol task maps to. */
-data class CvatJob(val id: Long, val state: String, val stage: String, val assigneeId: Long?)
+/**
+ * A CVAT job — the unit of assignment one protocol task maps to. The frame
+ * range matters: CVAT may split a task into several jobs, and each one is then
+ * responsible for only its own slice of the groundtruth.
+ */
+data class CvatJob(
+    val id: Long,
+    val state: String,
+    val stage: String,
+    val assigneeId: Long?,
+    val startFrame: Int,
+    val stopFrame: Int,
+)
 
 /**
  * The outcome of admitting an address. CVAT exposes no way to resolve an email
@@ -48,7 +60,7 @@ data class CvatMembership(val id: Long, val userId: Long, val username: String, 
  * CVAT account and accepts an invitation with it, so the launcher can never
  * author annotations as a worker.
  */
-class CvatOrg(private val http: CvatHttp) {
+class CvatOrg(val http: CvatHttp) {
     constructor(baseUrl: String, token: String) : this(CvatHttp(baseUrl, token))
 
     fun createOrganization(slug: String, name: String): Long =
@@ -171,6 +183,8 @@ class CvatOrg(private val http: CvatHttp) {
                 stage = row.jsonObject.getValue("stage").jsonPrimitive.content,
                 assigneeId = (row.jsonObject["assignee"] as? JsonObject)
                     ?.getValue("id")?.jsonPrimitive?.long,
+                startFrame = row.jsonObject.getValue("start_frame").jsonPrimitive.int,
+                stopFrame = row.jsonObject.getValue("stop_frame").jsonPrimitive.int,
             )
         }
 

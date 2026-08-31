@@ -101,12 +101,17 @@ class RoleStack(val cfg: DemoConfig, val log: (String) -> Unit) {
     }
 
     /** Reveal, reserve, co-sign (in-process witness), broadcast, confirm. */
+    /**
+     * [pulled] carries annotations read back out of an external tool, for jobs
+     * whose work does not live in the offer. Empty for ordinary inline jobs.
+     */
     fun settle(
         escrowId: String,
         offerEvent: NostrEvent,
         submitted: List<Validators.Submitted>,
+        pulled: Map<Pair<String, String>, String> = emptyMap(),
     ): Receipt {
-        val results = launcher.revealAndReserve(offerEvent, submitted)
+        val results = launcher.revealAndReserve(offerEvent, submitted, pulled)
         val pending = launcher.requestCosign(offerEvent, results, payoutAddresses(escrowId))
         val receipt = await("witness co-sign + payout broadcast") {
             witness.serveOnce()
