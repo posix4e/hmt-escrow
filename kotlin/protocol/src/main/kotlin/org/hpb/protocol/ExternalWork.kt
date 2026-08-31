@@ -118,15 +118,13 @@ object ExternalWork {
     /**
      * Swap each worker's completion assertion for the annotations someone
      * actually pulled — but only where those annotations hash to what the
-     * worker committed to at submission time.
+     * worker publicly committed to before anyone revealed anything.
      *
-     * This is what lets validation stay mechanical once the answers live in
-     * another system. A witness has no CVAT access and cannot fetch anything,
-     * yet it can re-run this over the reveal and the submissions alone: a
-     * launcher cannot invent an answer, because the bytes must hash to a
-     * commitment the worker signed before the launcher saw them. A row whose
-     * hash disagrees is dropped rather than guessed at — unverifiable work is
-     * not paid, and neither is work someone tampered with afterwards.
+     * [commitments] is the authority, not the submission: submissions are
+     * encrypted to the launcher, so only a public commitment can be checked by
+     * everyone. A row with no commitment, or one whose bytes disagree, is
+     * dropped rather than guessed at — unverifiable work is not paid, and
+     * neither is work someone edited afterwards.
      *
      * Rows that are not completion assertions pass through untouched, so
      * ordinary inline tasks are unaffected.
@@ -134,10 +132,27 @@ object ExternalWork {
     fun substitute(
         submitted: List<Validators.Submitted>,
         pulled: Map<Pair<String, String>, String>,
+        commitments: Map<Pair<String, String>, String>,
     ): List<Validators.Submitted> = submitted.mapNotNull { row ->
-        val completion = completion(row.answer) ?: return@mapNotNull row
-        val canonical = pulled[row.worker to row.taskKey] ?: return@mapNotNull null
-        if (hashOf(canonical) != completion.annotationsSha256) return@mapNotNull null
+        completion(row.answer) ?: return@mapNotNull row
+        val key = row.worker to row.taskKey
+        val committed = commitments[key] ?: return@mapNotNull null
+        val canonical = pulled[key] ?: return@mapNotNull null
+        if (hashOf(canonical) != committed) return@mapNotNull null
         row.copy(answer = canonical)
+    }
+
+    /**
+     * Every revealed answer for external work must hash to its worker's own
+     * public commitment. This is the check a witness can run with nothing but
+     * Nostr: it is what stops a launcher, who administers CVAT, from revealing
+     * annotations the worker never made.
+     */
+    fun revealMatchesCommitments(
+        rows: List<ResultRow>,
+        commitments: Map<Pair<String, String>, String>,
+    ): Boolean = rows.all { row ->
+        val committed = commitments[row.worker to row.taskKey] ?: return@all true
+        hashOf(row.answer) == committed
     }
 }

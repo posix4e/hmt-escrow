@@ -25,6 +25,7 @@ object ProtocolKinds {
     const val ENVELOPE = 9568
     const val CVAT_ACCESS_REQUEST = 9570 // worker -> launcher: the CVAT identity to admit
     const val CVAT_ACCESS_GRANT = 9571 // launcher -> worker: invitation key, plus a public binding
+    const val CVAT_COMMITMENT = 9572 // worker -> everyone: what its own annotations hashed to
     const val RECORD = org.hpb.engine.nostr.Kinds.RECORD
     const val PROOF = 9569 // reserved: ZK validation/payout proofs (roadmap)
 

@@ -21,6 +21,8 @@ import org.hpb.protocol.Records
 import org.hpb.protocol.Reserve
 import org.hpb.protocol.SignRequest
 import org.hpb.protocol.Validations
+import org.hpb.protocol.CvatCommitments
+import org.hpb.protocol.ExternalWork
 import org.hpb.protocol.Validators
 
 /**
@@ -143,9 +145,21 @@ class LauncherRole(private val ctx: RoleContext) {
     }
 
     /** Validate, publish the reveal, and reserve the payout total. */
-    fun revealAndReserve(offerEvent: NostrEvent, submitted: List<Validators.Submitted>): EscrowResults {
+    /**
+     * [pulled] carries annotations read back out of an external tool, keyed by
+     * (worker, task). Where a worker asserted completion rather than an answer,
+     * its row is replaced by what was pulled — but only if those bytes hash to
+     * the worker's own public commitment, which every witness re-checks. Empty
+     * for ordinary inline jobs, which are unaffected.
+     */
+    fun revealAndReserve(
+        offerEvent: NostrEvent,
+        submitted: List<Validators.Submitted>,
+        pulled: Map<Pair<String, String>, String> = emptyMap(),
+    ): EscrowResults {
         val offer = Offers.fromEvent(offerEvent)
-        val results = EscrowResults(offer.escrowId, Validators.validate(offer.validation, submitted))
+        val resolved = ExternalWork.substitute(submitted, pulled, commitments(offer.escrowId))
+        val results = EscrowResults(offer.escrowId, Validators.validate(offer.validation, resolved))
         check(ctx.nostr.publish(Validations.toEvent(ctx.privkey, results, ctx.now()))) {
             "reveal publish failed"
         }
@@ -160,6 +174,17 @@ class LauncherRole(private val ctx: RoleContext) {
         }
         return results
     }
+
+    private fun commitments(escrowId: String): Map<Pair<String, String>, String> =
+        CvatCommitments.index(
+            ctx.nostr.fetch(
+                NostrFilter(
+                    kinds = listOf(ProtocolKinds.CVAT_COMMITMENT),
+                    xTag = escrowId,
+                    limit = FETCH_LIMIT,
+                ),
+            ),
+        )
 
     data class PendingPayout(val request: PayoutRequest, val myPsbt: String, val lines: List<PayoutLine>)
 
@@ -224,5 +249,6 @@ class LauncherRole(private val ctx: RoleContext) {
 
     private companion object {
         const val GRANT_TTL_SECONDS = 3600L
+        const val FETCH_LIMIT = 500
     }
 }
