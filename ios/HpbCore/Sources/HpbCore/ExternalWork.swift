@@ -127,4 +127,9 @@ public enum ExternalWork {
     public static func annotationsHash(_ tags: [(Int, String)]) -> String {
         sha256(canonicalAnnotations(tags)).hex
     }
+
+    /// The hash a worker commits to publicly before submitting.
+    public static func hashOf(_ canonical: String) -> String {
+        sha256(canonical).hex
+    }
 }
