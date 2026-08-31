@@ -1,11 +1,13 @@
 package org.hpb.harness
 
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.hpb.cvat.CvatAdmission
 import org.hpb.cvat.CvatHttp
 import org.hpb.cvat.CvatOrg
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -71,9 +73,10 @@ class RealCvatOrgTest {
         val email = "$username@localhost.invalid"
 
         // Tolerates the HTTP 500 CVAT returns with no mail server configured.
-        val invitation = org.invite(slug, email)
+        val admission = org.invite(slug, email)
+        val invitation = assertIs<CvatAdmission.Invited>(admission, "invite was refused").invitation
         strays += invitation.userId
-        assertEquals(email, invitation.email, "invitation is for the wrong address")
+        assertEquals(email, invitation.username, "invitation resolved to the wrong account")
         assertTrue(invitation.key.isNotBlank(), "invitation carried no key")
 
         val workerToken = RealCvat.registerWorker(username, email, WORKER_PASSWORD)

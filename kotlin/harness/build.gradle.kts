@@ -23,15 +23,16 @@ tasks.test {
     environment("BITCOIND_EXE", System.getenv("BITCOIND_EXE") ?: "bitcoind")
 }
 
-// Pins CvatClient against a real CVAT server; the mock cannot validate our own
-// API guesses. Needs CVAT_URL and CVAT_TOKEN — see deploy/cvat/README.md.
+// Pins the CVAT client and the launcher's CVAT side against real services; a
+// mock cannot validate our own API guesses. Needs CVAT_URL and CVAT_TOKEN, and
+// HPB_RELAYS for the access handshake — see deploy/cvat and deploy/hpb.
 tasks.register<Test>("realCvatTest") {
     description = "Runs the CvatClient conformance test against a real CVAT deployment."
     group = "verification"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     filter { includeTestsMatching("*RealCvat*Test") }
-    listOf("CVAT_URL", "CVAT_TOKEN").forEach { name ->
+    listOf("CVAT_URL", "CVAT_TOKEN", "HPB_RELAYS").forEach { name ->
         System.getenv(name)?.let { environment(name, it) }
     }
     outputs.upToDateWhen { false }

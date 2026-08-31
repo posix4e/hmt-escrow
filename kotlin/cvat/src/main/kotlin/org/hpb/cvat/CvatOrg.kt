@@ -1,6 +1,7 @@
 package org.hpb.cvat
 
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -13,14 +14,28 @@ import kotlinx.serialization.json.long
 /**
  * An outstanding invitation. [key] is the credential the worker needs.
  *
- * CVAT creates a placeholder account named after the invited address and
- * exposes no `email` field on the invitation, so [email] is read from that
- * account's username.
+ * The invitation exposes no `email` field, only the account it resolved to.
+ * [username] is that account's name — the invited address when CVAT had to
+ * create a placeholder, but the person's existing username when they had
+ * already registered. Match on [userId], never on [username].
  */
-data class CvatInvitation(val key: String, val email: String, val userId: Long, val accepted: Boolean)
+data class CvatInvitation(val key: String, val username: String, val userId: Long, val accepted: Boolean)
 
 /** A CVAT job — the unit of assignment one protocol task maps to. */
 data class CvatJob(val id: Long, val state: String, val stage: String, val assigneeId: Long?)
+
+/**
+ * The outcome of admitting an address. CVAT exposes no way to resolve an email
+ * to a user — `search` does not cover it and `filter` rejects the term — so a
+ * launcher cannot look one up before inviting. It does not need to: membership
+ * of a workspace org is only ever granted by admitting a worker, so CVAT's own
+ * "already a member" is the signal that this account already backs someone.
+ */
+sealed interface CvatAdmission {
+    data class Invited(val invitation: CvatInvitation) : CvatAdmission
+
+    data object AlreadyMember : CvatAdmission
+}
 
 data class CvatMembership(val id: Long, val userId: Long, val username: String, val role: String, val active: Boolean)
 
@@ -105,36 +120,48 @@ class CvatOrg(private val http: CvatHttp) {
         ).id()
 
     /**
-     * Invite [email] into the org as a worker and return the invitation.
+     * Invite [email] into the org as a worker.
      *
-     * CVAT answers HTTP 500 "Email backend is not configured" on a deployment
-     * without SMTP — *after* writing the invitation, the user and the
-     * membership. The key is therefore still obtainable, so the outcome is
-     * decided by whether the invitation exists, not by the status code.
+     * Three outcomes, all normal. When the address already belongs to a
+     * registered account CVAT answers 201, the body *is* the invitation, and it
+     * is already accepted. When it must create a placeholder and no SMTP is
+     * configured it answers 500 "Email backend is not configured" — but only
+     * after writing the invitation, the user and the membership, so the key is
+     * still obtainable by listing. When the account is already in the org it
+     * answers 400, which is a refusal, not a failure.
      */
-    fun invite(slug: String, email: String): CvatInvitation {
+    fun invite(slug: String, email: String): CvatAdmission {
         val response = http.exchange(
             "POST",
             "/api/invitations?org=$slug",
             """{"role":"worker","email":"${email.escaped()}"}""",
         )
-        return invitations(slug).firstOrNull { it.email.equals(email, ignoreCase = true) }
-            ?: error(
-                "CVAT did not create an invitation for $email " +
-                    "(HTTP ${response.statusCode()}: ${response.body().decodeToString().take(SNIPPET)})",
-            )
+        val body = response.body().decodeToString()
+        if (response.statusCode() in HTTP_OK) {
+            invitation(Json.parseToJsonElement(body))?.let { return CvatAdmission.Invited(it) }
+        }
+        if (ALREADY_MEMBER in body) return CvatAdmission.AlreadyMember
+        // Placeholder path: the account CVAT just made is named after the address.
+        val listed = invitations(slug).firstOrNull { it.username.equals(email, ignoreCase = true) }
+        checkNotNull(listed) {
+            "CVAT did not create an invitation for $email " +
+                "(HTTP ${response.statusCode()}: ${body.take(SNIPPET)})"
+        }
+        return CvatAdmission.Invited(listed)
     }
 
     fun invitations(slug: String): List<CvatInvitation> =
-        http.get("/api/invitations?org=$slug&page_size=$PAGE").results().mapNotNull { row ->
-            val user = row.jsonObject["user"] as? JsonObject ?: return@mapNotNull null
-            CvatInvitation(
-                key = row.jsonObject.getValue("key").jsonPrimitive.content,
-                email = user.getValue("username").jsonPrimitive.content,
-                userId = user.getValue("id").jsonPrimitive.long,
-                accepted = row.jsonObject.getValue("accepted").jsonPrimitive.boolean,
-            )
-        }
+        http.get("/api/invitations?org=$slug&page_size=$PAGE").results().mapNotNull(::invitation)
+
+    private fun invitation(row: JsonElement): CvatInvitation? {
+        val user = row.jsonObject["user"] as? JsonObject ?: return null
+        return CvatInvitation(
+            key = row.jsonObject.getValue("key").jsonPrimitive.content,
+            username = user.getValue("username").jsonPrimitive.content,
+            userId = user.getValue("id").jsonPrimitive.long,
+            accepted = row.jsonObject.getValue("accepted").jsonPrimitive.boolean,
+        )
+    }
 
     fun jobs(taskId: Long): List<CvatJob> =
         http.get("/api/jobs?task_id=$taskId&page_size=$PAGE").results().map { row ->
@@ -174,6 +201,8 @@ class CvatOrg(private val http: CvatHttp) {
     private fun String.escaped() = replace("\\", "\\\\").replace("\"", "\\\"")
 
     private companion object {
+        val HTTP_OK = 200..299
+        const val ALREADY_MEMBER = "member of the organization already"
         const val PAGE = 100
         const val SNIPPET = 200
         const val POLL_ATTEMPTS = 60

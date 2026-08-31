@@ -8,8 +8,10 @@ import java.util.random.RandomGenerator
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
 import org.hpb.cvat.CvatHttp
 import org.hpb.cvat.CvatOrg
+import org.hpb.cvat.DemoFrames
 import org.hpb.cvat.MockCvat
 
 /**
@@ -23,7 +25,30 @@ object RealCvat {
     val baseUrl: String? = System.getenv("CVAT_URL")?.trimEnd('/')
     val token: String? = System.getenv("CVAT_TOKEN")
 
+    val relays: String? = System.getenv("HPB_RELAYS")?.takeIf { it.isNotBlank() }
+
     val enabled: Boolean get() = !baseUrl.isNullOrBlank() && !token.isNullOrBlank()
+
+    fun relayList(): List<String> = relays.orEmpty().split(",").map(String::trim).filter { it.isNotEmpty() }
+
+    /** Drawn shapes with known labels, so groundtruth validation is meaningful. */
+    fun shapeFrames(): List<Pair<String, ByteArray>> = DemoFrames.frames()
+
+    /**
+     * The worker joins with its *own* token; the launcher never has it.
+     *
+     * Idempotent: when the invited address already belongs to a registered
+     * account CVAT accepts the invitation on creation, so accepting again is a
+     * 400 "already accepted" rather than a failure.
+     */
+    fun acceptInvitation(workerToken: String, key: String) {
+        val response = CvatHttp(baseUrl!!, workerToken)
+            .exchange("POST", "/api/invitations/$key/accept", "{}")
+        val body = response.body().decodeToString()
+        check(response.statusCode() in 200..299 || "already accepted" in body) {
+            "accept -> HTTP ${response.statusCode()}: ${body.take(SNIPPET)}"
+        }
+    }
 
     fun http() = CvatHttp(baseUrl!!, token!!)
 
@@ -44,6 +69,11 @@ object RealCvat {
         return Json.parseToJsonElement(response.body())
             .jsonObject.getValue("key").jsonPrimitive.content
     }
+
+    /** Who a token belongs to, so a test can record cleanup before it can fail. */
+    fun selfId(workerToken: String): Long =
+        CvatHttp(baseUrl!!, workerToken).get("/api/users/self")
+            .jsonObject.getValue("id").jsonPrimitive.long
 
     /** Test hygiene only — a launcher revokes membership, it never deletes accounts. */
     fun deleteUser(id: Long) {
