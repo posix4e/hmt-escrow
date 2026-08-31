@@ -158,12 +158,14 @@ class CvatLiveJob(
         }
     }
 
-    private fun slug() = "hpb-live-${System.currentTimeMillis() / 1000}"
+    /** CVAT caps an organization slug at 16 characters. */
+    private fun slug() = "hpb-${System.currentTimeMillis() / 1000 % SLUG_SUFFIX_BOUND}"
 
     private companion object {
         const val FUND_BUFFER_SATS = 20_000L
         const val OFFER_TTL_SECONDS = 86_400L
         const val WEBHOOK_SECRET = "hpb-cvat-webhook"
         const val FETCH_LIMIT = 500
+        const val SLUG_SUFFIX_BOUND = 100_000_000L
     }
 }

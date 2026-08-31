@@ -63,6 +63,7 @@ data class CvatMembership(val id: Long, val userId: Long, val username: String, 
 class CvatOrg(val http: CvatHttp) {
     constructor(baseUrl: String, token: String) : this(CvatHttp(baseUrl, token))
 
+    /** [slug] must be at most 16 characters; CVAT rejects longer ones with 400. */
     fun createOrganization(slug: String, name: String): Long =
         http.post("/api/organizations", """{"slug":"$slug","name":"$name"}""").id()
 
