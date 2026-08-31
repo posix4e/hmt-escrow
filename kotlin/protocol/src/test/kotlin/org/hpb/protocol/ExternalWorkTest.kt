@@ -65,6 +65,20 @@ class ExternalWorkTest {
         assertEquals(ExternalWork.annotationsHash(two), ExternalWork.annotationsHash(one))
     }
 
+    /**
+     * Pinned, and pinned identically in
+     * `ios/HpbCore/Tests/HpbCoreTests/ExternalWorkTests.swift`. A phone hashes
+     * this and a server re-hashes it, so drift here withholds a payout rather
+     * than failing a test.
+     */
+    @Test
+    fun `the canonical hash is locked across languages`() {
+        assertEquals(
+            "627028bd8ef551f3c1fd96097bb70f55ff1b386885198b6294454de79f91d89f",
+            ExternalWork.annotationsHash(listOf(0 to "circle", 1 to "triangle", 2 to "square")),
+        )
+    }
+
     @Test
     fun `different annotations hash differently`() {
         val hash = ExternalWork.annotationsHash(listOf(0 to "circle"))
