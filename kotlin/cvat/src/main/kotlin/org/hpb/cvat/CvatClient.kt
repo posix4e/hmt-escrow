@@ -1,10 +1,5 @@
 package org.hpb.cvat
 
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -27,20 +22,14 @@ class CvatFrame(val bytes: ByteArray, val contentType: String)
  * annotations. Works against any CVAT >= 2.x — and against [MockCvat] when
  * you want to try the bridge without a CVAT deployment.
  */
-class CvatClient(baseUrl: String, private val token: String) {
-    private val base = baseUrl.trimEnd('/')
-    // HTTP/1.1 is not a preference. The JDK client defaults to HTTP/2 and
-    // negotiates an h2c upgrade, through which CVAT's proxy drops the request
-    // body — every call that carries one (appendTags) then fails with a
-    // "JSON parse error" from an empty body. MockCvat cannot reproduce this:
-    // com.sun.net.httpserver is HTTP/1.1-only, so no upgrade is ever attempted.
-    private val http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build()
+class CvatClient(private val http: CvatHttp) {
+    constructor(baseUrl: String, token: String) : this(CvatHttp(baseUrl, token))
 
     fun taskName(taskId: Long): String =
-        get("/api/tasks/$taskId").jsonObject.getValue("name").jsonPrimitive.content
+        http.get("/api/tasks/$taskId").jsonObject.getValue("name").jsonPrimitive.content
 
     fun labels(taskId: Long): List<CvatLabel> =
-        get("/api/labels?task_id=$taskId&page_size=100").jsonObject
+        http.get("/api/labels?task_id=$taskId&page_size=100").jsonObject
             .getValue("results").jsonArray.map {
                 CvatLabel(
                     it.jsonObject.getValue("id").jsonPrimitive.long,
@@ -49,55 +38,51 @@ class CvatClient(baseUrl: String, private val token: String) {
             }
 
     fun frameCount(taskId: Long): Int =
-        get("/api/tasks/$taskId/data/meta").jsonObject.getValue("size").jsonPrimitive.int
+        http.get("/api/tasks/$taskId/data/meta").jsonObject.getValue("size").jsonPrimitive.int
 
     /**
      * CVAT serves `quality=compressed` frames as JPEG, not PNG, so the media
      * type is returned alongside the bytes rather than assumed by the caller.
      */
     fun frame(taskId: Long, number: Int): CvatFrame =
-        exchange("GET", "/api/tasks/$taskId/data?org=&quality=compressed&type=frame&number=$number", null)
-            .let { CvatFrame(it.body(), it.headers().firstValue("Content-Type").orElse("image/jpeg")) }
+        http.exchange("GET", "/api/tasks/$taskId/data?org=&quality=compressed&type=frame&number=$number", null)
+            .let { response ->
+                check(response.statusCode() in 200..299) {
+                    "CVAT frame $number of task $taskId -> HTTP ${response.statusCode()}"
+                }
+                CvatFrame(response.body(), response.headers().firstValue("Content-Type").orElse("image/jpeg"))
+            }
 
     /** PATCH ?action=create — appends tags without touching existing work. */
     fun appendTags(taskId: Long, tags: List<CvatTag>) {
         val body = JsonObject(
             mapOf(
                 "version" to JsonPrimitive(0),
-                "tags" to JsonArray(
-                    tags.map {
-                        JsonObject(
-                            mapOf(
-                                "frame" to JsonPrimitive(it.frame),
-                                "label_id" to JsonPrimitive(it.labelId),
-                                "group" to JsonPrimitive(0),
-                                "source" to JsonPrimitive("auto"),
-                                "attributes" to JsonArray(emptyList()),
-                            ),
-                        )
-                    },
-                ),
+                "tags" to JsonArray(tags.map(::tagJson)),
                 "shapes" to JsonArray(emptyList()),
                 "tracks" to JsonArray(emptyList()),
             ),
         )
-        request("PATCH", "/api/tasks/$taskId/annotations?action=create", body.toString())
+        http.patch("/api/tasks/$taskId/annotations?action=create", body.toString())
     }
 
-    private fun get(path: String) = Json.parseToJsonElement(request("GET", path, null).decodeToString())
+    /** The tags CVAT currently holds for a task, so imports can be read back. */
+    fun tags(taskId: Long): List<CvatTag> =
+        http.get("/api/tasks/$taskId/annotations").jsonObject
+            .getValue("tags").jsonArray.map {
+                CvatTag(
+                    it.jsonObject.getValue("frame").jsonPrimitive.int,
+                    it.jsonObject.getValue("label_id").jsonPrimitive.long,
+                )
+            }
 
-    private fun request(method: String, path: String, body: String?): ByteArray =
-        exchange(method, path, body).body()
-
-    private fun exchange(method: String, path: String, body: String?): HttpResponse<ByteArray> {
-        val builder = HttpRequest.newBuilder(URI.create(base + path))
-            .header("Authorization", "Token $token")
-            .header("Content-Type", "application/json")
-            .method(method, body?.let(HttpRequest.BodyPublishers::ofString) ?: HttpRequest.BodyPublishers.noBody())
-        val response = http.send(builder.build(), HttpResponse.BodyHandlers.ofByteArray())
-        check(response.statusCode() in 200..299) {
-            "CVAT $method $path -> HTTP ${response.statusCode()}: ${response.body().decodeToString().take(200)}"
-        }
-        return response
-    }
+    private fun tagJson(tag: CvatTag) = JsonObject(
+        mapOf(
+            "frame" to JsonPrimitive(tag.frame),
+            "label_id" to JsonPrimitive(tag.labelId),
+            "group" to JsonPrimitive(0),
+            "source" to JsonPrimitive("auto"),
+            "attributes" to JsonArray(emptyList()),
+        ),
+    )
 }
