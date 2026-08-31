@@ -40,6 +40,21 @@ class CvatHttp(baseUrl: String, private val token: String) {
         return response.body()
     }
 
+    /** For bodies that are not JSON — CVAT takes frame uploads as multipart. */
+    fun postBytes(path: String, body: ByteArray, contentType: String): ByteArray {
+        val request = HttpRequest.newBuilder(URI.create(base + path))
+            .header("Authorization", "Token $token")
+            .header("Content-Type", contentType)
+            .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+            .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofByteArray())
+        check(response.statusCode() in HTTP_OK) {
+            "CVAT POST $path -> HTTP ${response.statusCode()}: " +
+                response.body().decodeToString().take(SNIPPET)
+        }
+        return response.body()
+    }
+
     /** Unchecked, for callers that must inspect a failure themselves. */
     fun exchange(method: String, path: String, body: String?): HttpResponse<ByteArray> {
         val publisher = body?.let(HttpRequest.BodyPublishers::ofString)
