@@ -1,3 +1,4 @@
+import HpbCore
 import SwiftUI
 
 /// The labeler, native: claim, label, submit, get paid — the same one-page
@@ -15,6 +16,8 @@ struct Palette {
 
 struct ContentView: View {
     @EnvironmentObject var store: WorkerStore
+    @EnvironmentObject var cvat: CvatStore
+    @State private var cvatPassword = ""
 
     var body: some View {
         ZStack {
@@ -24,6 +27,7 @@ struct ContentView: View {
                     header
                     addressField
                     relaysField
+                    cvatSection
                     sectionTitle("Jobs")
                     if store.jobs.isEmpty {
                         Text(store.lastError ?? "looking for work on the relays…")
@@ -79,6 +83,55 @@ struct ContentView: View {
             .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line))
             .accessibilityIdentifier("relayList")
+    }
+
+    /// Signing into CVAT happens on the device. The token stays in the
+    /// keychain — the launcher never sees it, which is what stops it from
+    /// annotating as you and then calling the result yours.
+    private var cvatSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("CVAT account")
+            TextField("CVAT address (http://host:8080)", text: $cvat.baseUrl)
+                .font(.system(size: 13, design: .monospaced))
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .keyboardType(.URL)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line))
+                .accessibilityIdentifier("cvatBaseUrl")
+            TextField("CVAT username", text: $cvat.username)
+                .font(.system(size: 13, design: .monospaced))
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line))
+                .accessibilityIdentifier("cvatUsername")
+            if cvat.signedIn {
+                HStack(spacing: 10) {
+                    Text("signed in as \(cvat.username)")
+                        .font(.system(size: 12)).foregroundColor(Palette.ok)
+                    Button("Sign out") { cvat.signOut() }
+                        .font(.system(size: 12)).foregroundColor(Palette.dim)
+                }
+            } else {
+                SecureField("CVAT password", text: $cvatPassword)
+                    .font(.system(size: 13, design: .monospaced))
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Palette.panel))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.line))
+                    .accessibilityIdentifier("cvatPassword")
+                Button("Sign in to CVAT") {
+                    let password = cvatPassword
+                    cvatPassword = ""
+                    Task { await cvat.signIn(password: password) }
+                }
+                .buttonStyle(AccentButton())
+                .accessibilityIdentifier("cvatSignIn")
+            }
+            if !cvat.status.isEmpty {
+                Text(cvat.status).font(.system(size: 12)).foregroundColor(Palette.dim)
+            }
+        }
     }
 
     private func sectionTitle(_ title: String) -> some View {
@@ -168,11 +221,16 @@ struct JobCard: View {
             }
         case "active":
             ForEach(job.tasks) { TaskCard(job: job, task: $0) }
+            // Work done in CVAT has no pick to make here: the app reads it back
+            // from CVAT at submit time and commits to what it finds.
+            let external = job.tasks.contains { $0.work != nil }
             let done = job.tasks.filter { store.picks[job.escrowId]?[$0.key] != nil }.count
-            Button("Submit \(done)/\(job.tasks.count) labels") { store.submit(job) }
-                .buttonStyle(AccentButton())
-                .disabled(done < job.tasks.count)
-                .accessibilityIdentifier("submitButton")
+            Button(external ? "I've finished in CVAT" : "Submit \(done)/\(job.tasks.count) labels") {
+                store.submit(job)
+            }
+            .buttonStyle(AccentButton())
+            .disabled(!external && done < job.tasks.count)
+            .accessibilityIdentifier("submitButton")
         case "claimed":
             Text("waiting for the launcher to grant your claim…")
                 .font(.system(size: 13)).foregroundColor(Palette.dim)
@@ -193,6 +251,35 @@ struct TaskCard: View {
     let task: WorkerStore.TaskModel
 
     var body: some View {
+        if let work = task.work {
+            externalCard(work)
+        } else {
+            inlineCard
+        }
+    }
+
+    /// The labeler is a worker client here, not the labeling tool: the actual
+    /// annotation happens in CVAT's own editor, which is where boxes, polygons
+    /// and interpolation live.
+    private func externalCard(_ work: CvatWorkSource) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(task.text).font(.system(size: 14)).foregroundColor(Palette.text)
+            Text("labels: \(work.labels.joined(separator: ", "))")
+                .font(.system(size: 12)).foregroundColor(Palette.dim)
+            if let url = URL(string: work.url) {
+                Link("Open in CVAT", destination: url)
+                    .buttonStyle(AccentButton())
+                    .accessibilityIdentifier("openInCvat")
+            }
+            Text("Annotate there, save, then tap “I've finished in CVAT”.")
+                .font(.system(size: 12)).foregroundColor(Palette.dim)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Palette.panel))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Palette.line))
+    }
+
+    private var inlineCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let data = task.imageData, let image = UIImage(data: data) {
                 Image(uiImage: image)

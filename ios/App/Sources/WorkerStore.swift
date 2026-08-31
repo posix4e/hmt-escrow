@@ -13,6 +13,8 @@ final class WorkerStore: ObservableObject {
         let text: String
         let imageData: Data?
         let choices: [String]
+        /// Set when the work lives in CVAT rather than in the offer.
+        let work: CvatWorkSource?
         var id: String { key }
     }
 
@@ -39,11 +41,16 @@ final class WorkerStore: ObservableObject {
     @Published var picks = [String: [String: String]]()
     @Published var lastError: String?
 
+    /// The worker's own CVAT session, injected so the launcher never has it.
+    var cvat: CvatStore?
+
     @AppStorage("payoutAddress") var payoutAddress = ""
     @AppStorage("relays") var relayList = ""
 
     private let demo: Bool
     private var session: WorkerSession?
+    private var relayClient: RelayClient?
+    private var privkey: [UInt8]?
     private var jobRows = [String: WorkerSession.JobRow]()
     private var poller: Task<Void, Never>?
 
@@ -65,11 +72,12 @@ final class WorkerStore: ObservableObject {
             return
         }
         do {
-            let session = try WorkerSession(
-                relays: RelayClient(relays: relays),
-                privkey: try WorkerKey.load()
-            )
+            let client = RelayClient(relays: relays)
+            let key = try WorkerKey.load()
+            let session = try WorkerSession(relays: client, privkey: key)
             self.session = session
+            self.relayClient = client
+            self.privkey = key
             pubkey = session.pubkey
             lastError = nil
             poller?.cancel()
@@ -126,21 +134,25 @@ final class WorkerStore: ObservableObject {
     /// parses as {text, image?, choices?} renders an image card with
     /// label buttons; plain text falls back to a free-text field.
     static func taskModel(_ task: TaskItem) -> TaskModel {
+        if let work = ExternalWork.workSource(task.question) {
+            let text = (try? Cj.parse(task.question))?.sOrNull("text") ?? task.question
+            return TaskModel(key: task.key, text: text, imageData: nil, choices: [], work: work)
+        }
         guard let parsed = try? Cj.parse(task.question) else {
-            return TaskModel(key: task.key, text: task.question, imageData: nil, choices: [])
+            return TaskModel(key: task.key, text: task.question, imageData: nil, choices: [], work: nil)
         }
         let text = parsed.sOrNull("text") ?? ""
         let image = parsed.sOrNull("image")
         let choices = (try? parsed.a("choices"))?.compactMap(\.stringValue) ?? []
         guard !text.isEmpty || image != nil else {
-            return TaskModel(key: task.key, text: task.question, imageData: nil, choices: [])
+            return TaskModel(key: task.key, text: task.question, imageData: nil, choices: [], work: nil)
         }
         var imageData: Data?
         if let image, image.hasPrefix("data:image/"),
            let base64 = image.split(separator: ",").dropFirst().first {
             imageData = Data(base64Encoded: String(base64))
         }
-        return TaskModel(key: task.key, text: text, imageData: imageData, choices: choices)
+        return TaskModel(key: task.key, text: text, imageData: imageData, choices: choices, work: nil)
     }
 
     func pick(_ job: JobModel, _ task: TaskModel, _ answer: String) {
@@ -173,6 +185,47 @@ final class WorkerStore: ObservableObject {
         }
     }
 
+    /// For work done in CVAT the answer is not a label but a commitment.
+    ///
+    /// The app reads back *your own* annotations with *your own* CVAT token,
+    /// hashes them, and publishes that hash publicly before submitting. That
+    /// public hash is what lets a witness refuse a reveal you never made — it
+    /// is the reason the launcher, which runs CVAT, cannot put words in your
+    /// mouth.
+    private func externalAnswers(
+        _ job: JobModel, _ assignment: AssignmentState
+    ) async throws -> [Answer] {
+        let external = job.tasks.compactMap { task in task.work.map { (task, $0) } }
+        guard !external.isEmpty, let cvat, let privkey, let relayClient else { return [] }
+        var answers = [Answer]()
+        for (task, work) in external {
+            let labels = try await cvat.labels(taskId: work.taskId)
+            let canonical = try await cvat.canonicalAnnotations(jobId: work.jobId, labels: labels)
+            let hash = ExternalWork.hashOf(canonical)
+
+            let commitment = try CvatCommitments.toEvent(
+                privkey,
+                CvatCommitment(
+                    escrowId: job.escrowId, taskKey: task.key,
+                    worker: pubkey, annotationsSha256: hash
+                ),
+                createdAt: Int64(Date().timeIntervalSince1970)
+            )
+            guard await relayClient.publish(commitment) else {
+                throw CvatError.http(0, "could not publish the annotation commitment")
+            }
+            answers.append(
+                Answer(
+                    taskKey: task.key,
+                    answer: ExternalWork.answer(
+                        CvatCompletion(cvatJobId: work.jobId, cvatUserId: 0, annotationsSha256: hash)
+                    )
+                )
+            )
+        }
+        return answers
+    }
+
     func submit(_ job: JobModel) {
         // only answers for the tasks this worker was actually granted
         let granted = Set(job.tasks.map(\.id))
@@ -189,10 +242,9 @@ final class WorkerStore: ObservableObject {
                     lastError = "no active assignment for this job"
                     return
                 }
-                try await session.submit(
-                    row, active,
-                    answers.map { Answer(taskKey: $0.key, answer: $0.value) }
-                )
+                let external = try await externalAnswers(job, active)
+                let inline = answers.map { Answer(taskKey: $0.key, answer: $0.value) }
+                try await session.submit(row, active, external.isEmpty ? inline : external)
                 lastError = nil
                 await refresh()
             } catch {

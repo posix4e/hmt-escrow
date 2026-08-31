@@ -12,6 +12,9 @@ public enum ProtocolKinds {
     public static let submission = 9563
     public static let validation = 9564
     public static let receipt = 9565
+    public static let cvatAccessRequest = 9570
+    public static let cvatAccessGrant = 9571
+    public static let cvatCommitment = 9572
 
     public static let version = 1
 }
