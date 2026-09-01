@@ -24,6 +24,18 @@ public enum Validators {
         return String(String.UnicodeScalarView(scalars)).lowercased()
     }
 
+    /// The key a tally is grouped by — never the native `String`.
+    ///
+    /// Swift's `String` equality is canonical equivalence, so `café` written NFC
+    /// and NFD compares equal here and collapses to one dictionary key, while
+    /// Kotlin's UTF-16 code-unit equality sees two. Two witnesses would compute
+    /// different winners and different payouts from identical data. Hex of the
+    /// normalized UTF-8 bytes is ASCII, so equality means the same thing on both
+    /// sides and depends on neither one's Unicode version.
+    public static func labelKey(_ answer: String) -> String {
+        Array(normalize(answer).utf8).hex
+    }
+
     /// The commitment format for groundtruth sets: sha256("key:normalized").
     public static func groundtruthHash(_ taskKey: String, _ answer: String) -> String {
         sha256("\(taskKey):\(normalize(answer))").hex
@@ -83,16 +95,24 @@ public enum Validators {
         return submissions.map {
             ResultRow(
                 taskKey: $0.taskKey, worker: $0.worker, answer: $0.answer,
-                accepted: winners[$0.taskKey].flatMap { $0 } == normalize($0.answer)
+                accepted: winners[$0.taskKey].flatMap { $0 } == labelKey($0.answer)
             )
         }
     }
 
     private static func winningAnswer(_ policy: ValidationPolicy, _ subs: [Submitted]) -> String? {
         var counts = [String: Int]()
-        for sub in subs { counts[normalize(sub.answer), default: 0] += 1 }
+        // Tallied by key, tie-broken on the label: hex of UTF-8 does not order
+        // the same as UTF-16 above ASCII, and utf16Less is the shared rule.
+        var labels = [String: String]()
+        for sub in subs {
+            let key = labelKey(sub.answer)
+            counts[key, default: 0] += 1
+            labels[key] = normalize(sub.answer)
+        }
         let best = counts.sorted {
-            $0.value != $1.value ? $0.value > $1.value : utf16Less($0.key, $1.key)
+            $0.value != $1.value ? $0.value > $1.value
+                : utf16Less(labels[$0.key] ?? $0.key, labels[$1.key] ?? $1.key)
         }[0]
         let needed = max(1, Int(ceil(Double(subs.count) * policy.agreementThreshold)))
         return best.value >= needed ? best.key : nil
