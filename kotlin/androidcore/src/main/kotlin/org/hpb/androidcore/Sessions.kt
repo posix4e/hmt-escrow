@@ -7,6 +7,12 @@ import org.hpb.protocol.Answer
 import org.hpb.protocol.AssignmentState
 import org.hpb.protocol.Assignments
 import org.hpb.protocol.Claim
+import org.hpb.protocol.CvatAccessCodec
+import org.hpb.protocol.CvatAccessGrant
+import org.hpb.protocol.CvatAccessRequest
+import org.hpb.protocol.CvatCommitment
+import org.hpb.protocol.CvatCommitments
+import org.hpb.protocol.ExternalWork
 import org.hpb.protocol.JobOffer
 import org.hpb.protocol.Offers
 import org.hpb.protocol.PayoutLine
@@ -16,6 +22,8 @@ import org.hpb.protocol.Reducer
 import org.hpb.protocol.Submission
 import org.hpb.protocol.Validations
 import org.hpb.protocol.Validators
+import org.hpb.protocol.WorkCompletion
+import org.hpb.protocol.WorkerToolsCodec
 
 /**
  * The worker's whole app state, derived from relays alone — no backend, no
@@ -58,6 +66,67 @@ class WorkerSession(private val relays: OkRelayClient, private val privkey: Byte
         )
         check(relays.publish(event)) { "submission publish failed" }
         return event
+    }
+
+    // ---- work that lives in another tool -------------------------------
+    //
+    // The same three steps the iOS client performs, kept here so the Compose
+    // shell and the web labeler share one implementation rather than each
+    // growing their own.
+
+    /**
+     * Declare which tools this control plane can *verify results for*.
+     *
+     * Not "can execute" — execution may be routed to a desktop or an agent.
+     * A launcher refuses external work to a worker that has not declared the
+     * tool, which is what stops a client claiming a job it can never finish.
+     */
+    fun declareTools(tools: List<String>): NostrEvent {
+        val event = WorkerToolsCodec.toEvent(privkey, tools, now())
+        check(relays.publish(event)) { "tool declaration publish failed" }
+        return event
+    }
+
+    /** Ask the launcher to admit this worker's own account in the tool. */
+    fun requestToolAccess(job: JobRow, claimEventId: String, accountRef: String): NostrEvent {
+        val event = CvatAccessCodec.request(
+            privkey, job.event.pubkey,
+            CvatAccessRequest(claimEventId, job.offer.escrowId, accountRef), now(),
+        )
+        check(relays.publish(event)) { "access request publish failed" }
+        return event
+    }
+
+    /** The access this worker has been granted for an escrow, if any. */
+    fun toolAccess(escrowId: String): CvatAccessGrant? = relays.fetch(
+        NostrFilter(kinds = listOf(ProtocolKinds.CVAT_ACCESS_GRANT), pTag = pubkey, limit = 100),
+    ).firstNotNullOfOrNull { event ->
+        runCatching { CvatAccessCodec.parseGrant(event, privkey) }.getOrNull()
+            ?.takeIf { it.escrowId == escrowId }
+    }
+
+    /** My own claim for an escrow, which the access request has to reference. */
+    fun claimEventId(escrowId: String): String? = relays.fetch(
+        NostrFilter(
+            kinds = listOf(ProtocolKinds.CLAIM), authors = listOf(pubkey),
+            xTag = escrowId, limit = 10,
+        ),
+    ).minByOrNull { it.createdAt }?.id
+
+    /**
+     * Commit publicly to what this worker's own work hashed to, then return the
+     * answer that asserts completion.
+     *
+     * The commitment must be published *before* the launcher reveals anything —
+     * it is what lets a witness refuse a reveal the worker never made.
+     */
+    fun commitAndAnswer(escrowId: String, taskKey: String, ref: String, canonical: String): Answer {
+        val hash = ExternalWork.hashOf(canonical)
+        val commitment = CvatCommitments.toEvent(
+            privkey, CvatCommitment(escrowId, taskKey, pubkey, hash), now(),
+        )
+        check(relays.publish(commitment)) { "commitment publish failed" }
+        return Answer(taskKey, ExternalWork.answer(WorkCompletion(ref, hash)))
     }
 
     data class Earning(val escrowId: String, val txid: String, val sats: Long)

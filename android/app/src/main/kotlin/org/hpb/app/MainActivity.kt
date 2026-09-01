@@ -26,6 +26,7 @@ import org.hpb.androidcore.WitnessSession
 import org.hpb.androidcore.WorkerSession
 import org.hpb.engine.hex
 import org.hpb.engine.hexBytes
+import org.hpb.protocol.ExternalWork
 
 /**
  * The thin Compose shell — every behavior lives in :androidcore (JVM-tested).
@@ -35,21 +36,35 @@ import org.hpb.engine.hexBytes
  */
 class MainActivity : ComponentActivity() {
 
-    private fun identityKey(): ByteArray {
-        val prefs = getSharedPreferences("hpb", Context.MODE_PRIVATE)
-        prefs.getString("identity_key", null)?.let { return it.hexBytes() }
+    /**
+     * The worker key lives in the vault, and a key already stored under the old
+     * plain-preferences scheme is migrated rather than abandoned — it is the
+     * identity every claim and unpaid earning is addressed to.
+     */
+    private fun identityKey(vault: Vault): ByteArray {
+        vault.workerKey()?.let { return it.hexBytes() }
+        val legacy = getSharedPreferences("hpb", Context.MODE_PRIVATE).getString("identity_key", null)
+        if (legacy != null) {
+            vault.storeWorkerKey(legacy)
+            return legacy.hexBytes()
+        }
         val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
-        prefs.edit().putString("identity_key", key.hex()).apply()
+        vault.storeWorkerKey(key.hex())
         return key
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val relays = OkRelayClient(listOf(DEFAULT_RELAY))
-        val worker = WorkerSession(relays, identityKey())
+        val vault = Vault(this)
+        val settings = getSharedPreferences("hpb", Context.MODE_PRIVATE)
+        val relayUrl = settings.getString("relay", null) ?: DEFAULT_RELAY
+        val toolUrl = settings.getString("cvat_url", null) ?: ""
+        val relays = OkRelayClient(listOf(relayUrl))
+        val worker = WorkerSession(relays, identityKey(vault))
+        val tools = ToolAccess(vault, mapOf(ExternalWork.TOOL_CVAT to toolUrl))
         setContent {
             MaterialTheme {
-                AppScaffold(worker, WitnessSession(relays), DashboardModel(relays))
+                AppScaffold(worker, WitnessSession(relays), DashboardModel(relays), tools)
             }
         }
     }
@@ -60,7 +75,12 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AppScaffold(worker: WorkerSession, witness: WitnessSession, dashboard: DashboardModel) {
+fun AppScaffold(
+    worker: WorkerSession,
+    witness: WitnessSession,
+    dashboard: DashboardModel,
+    tools: ToolAccess? = null,
+) {
     var tab by remember { mutableIntStateOf(0) }
     val titles = listOf("Jobs", "Earnings", "Witness", "Dashboard")
     Scaffold(
@@ -79,7 +99,7 @@ fun AppScaffold(worker: WorkerSession, witness: WitnessSession, dashboard: Dashb
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             when (tab) {
-                0 -> JobsScreen(worker)
+                0 -> JobsScreen(worker, tools)
                 1 -> EarningsScreen(worker)
                 2 -> WitnessScreen(witness)
                 else -> DashboardScreen(dashboard)

@@ -69,6 +69,9 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // Credentials are held in a Keystore-backed store, not plain preferences —
+    // the worker key is this worker's identity and its loss costs money.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }
 
 configurations.all {

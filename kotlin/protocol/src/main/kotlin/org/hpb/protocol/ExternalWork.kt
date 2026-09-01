@@ -80,6 +80,13 @@ object ExternalWork {
         ),
     ).toString()
 
+    /**
+     * The human-readable half of a question, for clients that must show
+     * *something* and must never show a raw encoding blob.
+     */
+    fun displayText(question: String): String =
+        runCatching { Pj.parse(question).sOrNull("text") }.getOrNull() ?: question
+
     /** Sorted, so the manifest hash never depends on map iteration order. */
     private fun paramsJson(params: Map<String, String>): JsonObject =
         JsonObject(params.toSortedMap().mapValues { Pj.str(it.value) })
