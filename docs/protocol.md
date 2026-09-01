@@ -49,9 +49,109 @@ verify event signatures on read; relays are transport, never truth.
 | 9567 | regular | any | abuse report |
 | 9568 | regular | any | NIP-44 envelope: `psbt_sign_request` / `psbt_sign_response` |
 | 9569 | regular | reserved | ZK validation/payout proofs (roadmap; offers carry `require_proof`) |
+| 9570 | regular | worker | work access request (NIP-44 to the launcher): the account to admit |
+| 9571 | regular | launcher | work access grant: credential NIP-44 to the worker, identity binding in tags |
+| 9572 | regular | worker | work commitment: the hash of the worker's own result, **public** |
+| 9573 | regular | worker | work dispatch (NIP-44 to an agent): a job to execute, with a delegated credential |
+| 9574 | regular | agent | work status: `accepted` / `done` / `failed` |
+| 33403 | addressable | worker | declared tools, d=`tools`: what this worker can verify results for |
 
 Every escrow-scoped event carries `["x", <escrow_id>]` (relay-indexed).
 Contents are JSON with `"v": 1`.
+
+## Canonical JSON
+
+Event ids are hashes of serialized events, and the on-chain manifest commitment
+is a hash of a serialized offer — so **serialization is consensus**. Two
+implementations that disagree by one byte disagree about identity and about
+money. The rules, in full, so an implementation can be written from this
+document rather than reverse-engineered from the fixtures:
+
+- **No insignificant whitespace.** No spaces after `:` or `,`, no trailing
+  newline.
+- **Object keys keep insertion order.** They are *not* sorted. Order is part of
+  the format, so a producer that reorders keys produces a different hash. Where
+  a map's own order is not meaningful — a work source's `params` — the producer
+  sorts by key before emitting, and that sort is part of that field's definition,
+  not a general rule.
+- **Strings** escape `"` and `\`, use the short forms `\b \t \n \f \r` for
+  U+0008, U+0009, U+000A, U+000C and U+000D, and escape every other scalar below
+  U+0020 as `\u00xx` with **lowercase** hex. Everything else, including all
+  non-ASCII, is emitted literally as UTF-8. Codepoints above the BMP are not
+  escaped.
+- **Integers** are emitted verbatim with no exponent and no `.0`.
+- **Doubles** use each language's shortest round-tripping form, which keeps a
+  trailing `.0` for integral values. The protocol only carries plain fractions
+  here (`0.5`), and anything needing more precision should be an integer.
+- **Booleans and null** are `true`, `false`, `null`.
+- **Absent is not null.** A null-valued field is omitted entirely rather than
+  emitted as `null`.
+
+This is a bespoke scheme rather than [RFC 8785 JCS](https://www.rfc-editor.org/rfc/rfc8785),
+and the difference is deliberate to record: JCS *sorts* keys and escapes
+differently, so adopting it would change every hash in the protocol and require
+a version bump. It remains the obvious candidate if a third implementation ever
+makes reproducing these rules a burden.
+
+Nostr **event ids** are not covered by this: those follow NIP-01's own
+serialization, which this protocol does not get to choose.
+
+## Work that lives in another tool
+
+Some work cannot be carried in an offer — annotation in a real editor, with
+boxes and interpolation. Such a task names *where the work is* instead, and the
+worker's client brings them to it.
+
+This rides inside the existing free-form strings rather than adding fields to
+`Claim` or `Grant`, which are closed shapes covered by the vector corpus.
+
+`Task.question` carries, alongside the human-readable `text` that every client
+already shows:
+
+```json
+{"text": "…",
+ "work": {"tool": "cvat", "url": "https://…", "surface": "desktop",
+          "result": "tags", "params": {"job_id": "57"}}}
+```
+
+- `tool` and `url` are the only fields a client needs. A client that has never
+  heard of `tool` must still offer `url`, not hide the job.
+- `surface` is `desktop`, `mobile` or `any` — a routing hint, not a
+  restriction. Unrecognised values mean `any`.
+- `result` names the canonical form of the result (below). Unknown forms must
+  fail loudly; hashing an unrecognised form silently withholds payment later.
+- `params` is opaque to everyone but that tool's adapter, and is emitted with
+  keys sorted.
+
+`Answer.answer` then carries a completion assertion rather than an answer,
+because the answer is in the tool:
+
+```json
+{"completed": "true", "ref": "57", "result_sha256": "<hex>"}
+```
+
+### Result forms
+
+`tags`: one label per frame. Frames ascending, then label; labels normalized by
+trim and lowercase, one `<frame>:<label>` per line joined by `\n`. This is the
+byte string that gets hashed.
+
+### The commitment (9572)
+
+The worker publishes `sha256` of its own canonical result **publicly**, before
+the launcher reveals anything. This is what makes work in a tool the launcher
+administers verifiable: submissions are NIP-44 encrypted to the launcher, so a
+witness cannot read them, and without a public commitment the launcher could
+reveal whatever it liked. A revealed answer that does not hash to its worker's
+commitment must not be paid.
+
+### Declared tools (33403)
+
+A worker publishes the tools it can **verify results for** — which is not the
+same as execute, since execution may be routed to another device or an agent.
+A launcher must refuse external work to a worker that has not declared the
+tool, and should say so in the grant's `reason`. Inline work needs no
+declaration.
 
 ## Job offer (33400)
 
