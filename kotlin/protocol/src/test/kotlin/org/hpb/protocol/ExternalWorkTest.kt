@@ -1,6 +1,8 @@
 package org.hpb.protocol
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
@@ -11,12 +13,11 @@ import org.junit.jupiter.api.Test
  * so anything order- or case-dependent would break payouts rather than a test.
  */
 class ExternalWorkTest {
-    private val work = CvatWorkSource(
-        baseUrl = "http://cvat.invalid",
-        org = "hpb",
-        taskId = 12,
-        jobId = 42,
-        labels = listOf("circle", "square", "triangle"),
+    private val work = WorkSource(
+        tool = "cvat",
+        url = "http://cvat.invalid/tasks/12/jobs/42",
+        surface = WorkSurface.DESKTOP,
+        params = mapOf("org" to "hpb", "task_id" to "12", "job_id" to "42"),
     )
 
     @Test
@@ -32,21 +33,38 @@ class ExternalWorkTest {
         assertEquals("Annotate job 42", Pj.parse(question).getValue("text").let { it.toString().trim('"') })
     }
 
+    /** A client that has never heard of a tool must still get a usable link. */
     @Test
-    fun `the browser url points at the cvat job`() {
-        assertEquals("http://cvat.invalid/tasks/12/jobs/42", work.url)
+    fun `an unknown tool still yields a work source`() {
+        val exotic = WorkSource(tool = "label-studio", url = "http://ls.invalid/1")
+        val parsed = assertNotNull(ExternalWork.workSource(ExternalWork.question("Label it", exotic)))
+        assertEquals("label-studio", parsed.tool)
+        assertEquals("http://ls.invalid/1", parsed.url)
+        assertEquals(WorkSurface.ANY, parsed.surface, "an absent surface should not be desktop")
+    }
+
+    @Test
+    fun `an unrecognised surface falls back to any`() {
+        assertEquals(WorkSurface.ANY, WorkSurface.parse("hologram"))
+        assertEquals(WorkSurface.DESKTOP, WorkSurface.parse("DESKTOP"))
+    }
+
+    /** Hashing an unknown form would silently withhold a payout later. */
+    @Test
+    fun `an unsupported result form fails loudly`() {
+        assertFailsWith<IllegalStateException> { ExternalWork.canonical("bounding-boxes", emptyList()) }
     }
 
     @Test
     fun `an inline task is not mistaken for external work`() {
         assertNull(ExternalWork.workSource("""{"text":"pick one","choices":["a","b"]}"""))
         assertNull(ExternalWork.workSource("just a plain question"))
-        assertNull(ExternalWork.workSource("""{"work":{"tool":"labelstudio","base_url":"x"}}"""))
+        assertNull(ExternalWork.workSource("""{"work":{"tool":"labelstudio"}}"""), "no url means no work source")
     }
 
     @Test
     fun `a completion round-trips through the answer`() {
-        val completion = CvatCompletion(cvatJobId = 42, cvatUserId = 7, annotationsSha256 = "abc123")
+        val completion = WorkCompletion(ref = "42", resultSha256 = "abc123")
         assertEquals(completion, ExternalWork.completion(ExternalWork.answer(completion)))
     }
 
@@ -54,6 +72,7 @@ class ExternalWorkTest {
     fun `a plain answer is not mistaken for a completion`() {
         assertNull(ExternalWork.completion("cat"))
         assertNull(ExternalWork.completion("""{"completed":"true"}"""))
+        assertNull(ExternalWork.completion("""{"ref":"42"}"""), "a completion without a hash is not one")
     }
 
     /** Whatever order CVAT hands them back, both sides must hash the same bytes. */

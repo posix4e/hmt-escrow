@@ -6,7 +6,6 @@ import org.hpb.engine.nostr.NostrFilter
 import org.hpb.protocol.CvatAccessCodec
 import org.hpb.protocol.CvatAccessGrant
 import org.hpb.protocol.CvatIdentity
-import org.hpb.protocol.CvatWorkSource
 import org.hpb.protocol.ExternalWork
 import org.hpb.protocol.ProtocolKinds
 import org.hpb.protocol.Task
@@ -57,17 +56,14 @@ class CvatExchangeRole(
      * because the manifest already hashes every question.
      */
     fun tasks(workspace: CvatWorkspace): List<Task> = org.jobs(workspace.taskId).map { job ->
-        val work = CvatWorkSource(
-            baseUrl = workspace.baseUrl,
-            org = workspace.orgSlug,
-            taskId = workspace.taskId,
-            jobId = job.id,
-            labels = workspace.labels,
-        )
+        val work = CvatTool.workSource(workspace, job.id)
         Task(
-            key = "cvat-job-${job.id}",
+            // Tool-neutral: this key is hashed into the on-chain manifest, so
+            // baking a tool name into it would harden a CVAT assumption into
+            // the escrow commitment itself.
+            key = "unit-${job.id}",
             question = ExternalWork.question(
-                "Annotate CVAT job ${job.id} — labels: ${workspace.labels.joinToString(", ")}",
+                "Annotate job ${job.id} — labels: ${workspace.labels.joinToString(", ")}",
                 work,
             ),
         )

@@ -7,6 +7,7 @@ import org.hpb.headless.RoleStack
 import org.hpb.protocol.CvatAccessCodec
 import org.hpb.protocol.CvatIdentity
 import org.hpb.protocol.ExternalWork
+import org.hpb.protocol.WorkSource
 import org.hpb.protocol.ProtocolKinds
 import org.hpb.protocol.JobOffer
 import org.hpb.protocol.KycPolicy
@@ -58,7 +59,7 @@ class CvatLiveJob(
     private fun groundtruth(workspace: CvatWorkspace, tasks: List<Task>): Map<String, String> =
         org.jobs(workspace.taskId).associate { job ->
             val frames = (job.startFrame..job.stopFrame).map { it to DemoFrames.SHAPES[it] }
-            "cvat-job-${job.id}" to ExternalWork.canonicalAnnotations(frames)
+            "unit-${job.id}" to ExternalWork.canonical(WorkSource.RESULT_TAGS, frames)
         }.filterKeys { key -> tasks.any { it.key == key } }
 
     private fun publish(
@@ -153,8 +154,9 @@ class CvatLiveJob(
         val jobs = org.jobs(workspace.taskId).associateBy { it.id }
         return tasks.mapNotNull { task ->
             val work = ExternalWork.workSource(task.question) ?: return@mapNotNull null
-            val assignee = jobs[work.jobId]?.assigneeId ?: return@mapNotNull null
-            workerByCvatId[assignee]?.let { CvatAssignment(it, task.key, work.jobId) }
+            val unit = CvatTool.unitId(work) ?: return@mapNotNull null
+            val assignee = jobs[unit]?.assigneeId ?: return@mapNotNull null
+            workerByCvatId[assignee]?.let { CvatAssignment(it, task.key, unit) }
         }
     }
 

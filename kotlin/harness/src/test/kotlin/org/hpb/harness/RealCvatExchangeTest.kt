@@ -58,7 +58,7 @@ class RealCvatExchangeTest {
         assertTrue(tasks.isNotEmpty(), "provisioning produced no protocol tasks")
 
         val work = assertNotNull(ExternalWork.workSource(tasks.first().question), "task carries no work source")
-        assertEquals(workspace.taskId, work.taskId)
+        assertEquals(workspace.taskId.toString(), work.params["task_id"])
         assertTrue(work.url.startsWith(RealCvat.baseUrl!!), "work url does not point at this cvat")
 
         val worker = admitWorker(exchange, org, workspace, nostr, escrowId, strays)

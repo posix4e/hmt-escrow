@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.hpb.cvat.CvatClient
 import org.hpb.cvat.CvatLiveJob
 import org.hpb.cvat.CvatOrg
+import org.hpb.cvat.CvatTool
 import org.hpb.cvat.DemoFrames
 import org.hpb.engine.nostr.NostrClient
 import org.hpb.engine.nostr.NostrFilter
@@ -18,8 +19,9 @@ import org.hpb.protocol.CvatAccessCodec
 import org.hpb.protocol.CvatAccessRequest
 import org.hpb.protocol.CvatCommitment
 import org.hpb.protocol.CvatCommitments
-import org.hpb.protocol.CvatCompletion
+import org.hpb.protocol.WorkCompletion
 import org.hpb.protocol.ExternalWork
+import org.hpb.protocol.WorkSource
 import org.hpb.protocol.Offers
 import org.hpb.protocol.ProtocolKinds
 import org.hpb.protocol.Submission
@@ -124,14 +126,16 @@ class CvatLiveJobTest {
         val offer = Offers.fromEvent(offerEvent)
         val task = offer.tasks.first()
         val work = assertNotNull(ExternalWork.workSource(task.question), "task has no work source")
-        val labels = CvatClient(RealCvat.http()).labels(work.taskId).associateBy { it.name }
-        val jobs = org.jobs(work.taskId)
-        val job = jobs.first { it.id == work.jobId }
+        val unit = assertNotNull(CvatTool.unitId(work), "work source names no cvat job")
+        val taskId = assertNotNull(work.params["task_id"]?.toLongOrNull(), "work source names no cvat task")
+        val labels = CvatClient(RealCvat.http()).labels(taskId).associateBy { it.name }
+        val job = org.jobs(taskId).first { it.id == unit }
 
         val correct = (job.startFrame..job.stopFrame).map { it to labels.getValue(DemoFrames.SHAPES[it]).id }
-        RealCvat.annotateJob(cvatToken, work.jobId, correct)
+        RealCvat.annotateJob(cvatToken, unit, correct)
 
-        val canonical = ExternalWork.canonicalAnnotations(
+        val canonical = ExternalWork.canonical(
+            WorkSource.RESULT_TAGS,
             (job.startFrame..job.stopFrame).map { it to DemoFrames.SHAPES[it] },
         )
         val commitment = CvatCommitments.toEvent(
@@ -146,7 +150,7 @@ class CvatLiveJobTest {
                 .firstOrNull { Assignments.parseGrant(it).granted }?.id
         }
         val answer = ExternalWork.answer(
-            CvatCompletion(work.jobId, cvatUserId = 0, annotationsSha256 = ExternalWork.hashOf(canonical)),
+            WorkCompletion(ref = unit.toString(), resultSha256 = ExternalWork.hashOf(canonical)),
         )
         val submission = Assignments.submission(
             workerKey, offerEvent.pubkey,

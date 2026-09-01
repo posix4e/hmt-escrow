@@ -1,6 +1,7 @@
 package org.hpb.cvat
 
 import org.hpb.protocol.ExternalWork
+import org.hpb.protocol.WorkSource
 import org.hpb.protocol.Validators
 
 /**
@@ -19,7 +20,7 @@ class CvatRecordingRole(private val client: CvatClient, private val labelsById: 
     /** The canonical annotations for one CVAT job, as this recorder saw them. */
     fun pull(jobId: Long): String {
         val tags = client.jobTags(jobId).map { it.frame to (labelsById[it.labelId] ?: UNKNOWN_LABEL) }
-        return ExternalWork.canonicalAnnotations(tags)
+        return ExternalWork.canonical(WorkSource.RESULT_TAGS, tags)
     }
 
     /**

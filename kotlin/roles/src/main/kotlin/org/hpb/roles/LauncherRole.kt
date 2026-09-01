@@ -24,6 +24,7 @@ import org.hpb.protocol.Validations
 import org.hpb.protocol.CvatCommitments
 import org.hpb.protocol.ExternalWork
 import org.hpb.protocol.Validators
+import org.hpb.protocol.WorkerToolsCodec
 
 /**
  * The launcher runs the whole job from its own client — publish, grant,
@@ -102,7 +103,8 @@ class LauncherRole(private val ctx: RoleContext) {
         ).sortedWith(compareBy({ it.createdAt }, { it.id }))
         var granted = 0
         return claims.map { claimEvent ->
-            val accept = granted < maxWorkers && kycSatisfied(offer, claimEvent)
+            val refusal = refuse(offer, claimEvent, granted, maxWorkers)
+            val accept = refusal == null
             if (accept) granted++
             val grant = Assignments.grant(
                 ctx.privkey, claimEvent.pubkey,
@@ -110,13 +112,56 @@ class LauncherRole(private val ctx: RoleContext) {
                     claimEvent.id, offer.escrowId, accept,
                     if (accept) offer.tasks.map { it.key } else emptyList(),
                     expiresAt = ctx.now() + GRANT_TTL_SECONDS,
-                    reason = if (accept) null else "not eligible",
+                    reason = refusal,
                 ),
                 ctx.now(),
             )
             check(ctx.nostr.publish(grant)) { "grant publish failed" }
             grant
         }
+    }
+
+    /**
+     * Why this claim cannot be granted, or null to grant it.
+     *
+     * Naming the gate matters: a bare "not eligible" tells a worker nothing
+     * about whether to fix their KYC, sign into a tool, or simply try a
+     * different job.
+     */
+    private fun refuse(
+        offer: JobOffer,
+        claimEvent: NostrEvent,
+        granted: Int,
+        maxWorkers: Int,
+    ): String? = when {
+        granted >= maxWorkers -> "all assignments taken"
+        !kycSatisfied(offer, claimEvent) -> "kyc attestation missing or unaccepted"
+        !toolSatisfied(offer, claimEvent) -> "worker has not declared support for ${requiredTools(offer)}"
+        else -> null
+    }
+
+    /** The tools an offer's tasks live in; empty for ordinary inline work. */
+    private fun requiredTools(offer: JobOffer): Set<String> =
+        offer.tasks.mapNotNull { ExternalWork.workSource(it.question)?.tool }.toSet()
+
+    /**
+     * Only enforced for work that lives in another tool. Inline jobs — and every
+     * client that predates capability declarations — are unaffected.
+     */
+    private fun toolSatisfied(offer: JobOffer, claimEvent: NostrEvent): Boolean {
+        val required = requiredTools(offer)
+        if (required.isEmpty()) return true
+        val declared = WorkerToolsCodec.latest(
+            ctx.nostr.fetch(
+                NostrFilter(
+                    kinds = listOf(ProtocolKinds.WORKER_TOOLS),
+                    authors = listOf(claimEvent.pubkey),
+                    dTag = WorkerToolsCodec.D_TAG,
+                    limit = FETCH_LIMIT,
+                ),
+            ),
+        )[claimEvent.pubkey].orEmpty()
+        return declared.containsAll(required)
     }
 
     private fun kycSatisfied(offer: JobOffer, claimEvent: NostrEvent): Boolean {

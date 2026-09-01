@@ -10,6 +10,7 @@ object ProtocolKinds {
     const val JOB_OFFER = 33400
     const val REGISTRATION = 33401 // reserved: hosted-oracle deployments
     const val REGISTRATION_ACK = 33402 // reserved
+    const val WORKER_TOOLS = 33403 // worker -> everyone: the tools it can verify results for
     const val ATTESTATION = 33405
     const val REPUTATION_SNAPSHOT = 33406
 
@@ -26,6 +27,8 @@ object ProtocolKinds {
     const val CVAT_ACCESS_REQUEST = 9570 // worker -> launcher: the CVAT identity to admit
     const val CVAT_ACCESS_GRANT = 9571 // launcher -> worker: invitation key, plus a public binding
     const val CVAT_COMMITMENT = 9572 // worker -> everyone: what its own annotations hashed to
+    const val WORK_DISPATCH = 9573 // worker -> agent: a job to execute, with a delegated credential
+    const val WORK_STATUS = 9574 // agent -> worker: accepted / done / failed
     const val RECORD = org.hpb.engine.nostr.Kinds.RECORD
     const val PROOF = 9569 // reserved: ZK validation/payout proofs (roadmap)
 

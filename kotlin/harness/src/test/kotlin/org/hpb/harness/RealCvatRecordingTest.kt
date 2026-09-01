@@ -11,7 +11,7 @@ import org.hpb.cvat.CvatOrg
 import org.hpb.cvat.CvatRecordingRole
 import org.hpb.cvat.DemoFrames
 import org.hpb.engine.Secp
-import org.hpb.protocol.CvatCompletion
+import org.hpb.protocol.WorkCompletion
 import org.hpb.protocol.ExternalWork
 import org.hpb.protocol.ValidationPolicy
 import org.hpb.protocol.ValidationType
@@ -142,7 +142,7 @@ class RealCvatRecordingTest {
     }
 
     private fun commitment(canonical: String) = ExternalWork.answer(
-        CvatCompletion(cvatJobId = 1, cvatUserId = 1, annotationsSha256 = ExternalWork.hashOf(canonical)),
+        WorkCompletion(ref = "1", resultSha256 = ExternalWork.hashOf(canonical)),
     )
 
     private companion object {

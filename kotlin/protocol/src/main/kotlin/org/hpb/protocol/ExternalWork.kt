@@ -1,35 +1,50 @@
 package org.hpb.protocol
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.hpb.engine.hex
 import org.hpb.engine.sha256
-import org.hpb.protocol.Pj.a
 import org.hpb.protocol.Pj.l
 import org.hpb.protocol.Pj.o
 import org.hpb.protocol.Pj.s
+import org.hpb.protocol.Pj.sOrNull
 
-/** Where the work actually lives, when it is not carried in the offer. */
-data class CvatWorkSource(
-    val baseUrl: String,
-    val org: String,
-    val taskId: Long,
-    val jobId: Long,
-    val labels: List<String>,
+/** Which surface the work expects, and therefore where a client should route it. */
+enum class WorkSurface {
+    DESKTOP, MOBILE, ANY;
+
+    companion object {
+        fun parse(raw: String?): WorkSurface =
+            entries.firstOrNull { it.name.equals(raw, ignoreCase = true) } ?: ANY
+    }
+}
+
+/**
+ * Where the work actually lives, when it is not carried in the offer.
+ *
+ * Deliberately thin: [tool] and [url] are all a client needs to route and open
+ * it, so a client that has never heard of a tool still shows a working link
+ * rather than nothing. Everything a tool needs beyond that lives in [params],
+ * opaque to everyone except that tool's adapter.
+ */
+data class WorkSource(
+    val tool: String,
+    val url: String,
+    val surface: WorkSurface = WorkSurface.ANY,
+    val result: String = RESULT_TAGS,
+    val params: Map<String, String> = emptyMap(),
 ) {
-    /** What the worker opens in a browser. */
-    val url: String get() = "${baseUrl.trimEnd('/')}/tasks/$taskId/jobs/$jobId"
+    companion object {
+        const val RESULT_TAGS = "tags"
+    }
 }
 
 /**
  * What a worker asserts instead of an answer: that they finished an assignment
  * in the external tool, and what their work hashed to when they read it back.
  */
-data class CvatCompletion(
-    val cvatJobId: Long,
-    val cvatUserId: Long,
-    val annotationsSha256: String,
-)
+data class WorkCompletion(val ref: String, val resultSha256: String)
 
 /**
  * The phase-0 encoding for work that lives in another tool.
@@ -53,57 +68,76 @@ object ExternalWork {
      * fall back to showing the raw question string when neither `text` nor
      * `image` is present, which would put JSON in front of a worker.
      */
-    fun question(text: String, work: CvatWorkSource): String = Pj.obj(
+    fun question(text: String, work: WorkSource): String = Pj.obj(
         "text" to Pj.str(text),
         "work" to Pj.obj(
-            "tool" to Pj.str(TOOL_CVAT),
-            "base_url" to Pj.str(work.baseUrl),
-            "org" to Pj.str(work.org),
-            "task_id" to Pj.num(work.taskId),
-            "job_id" to Pj.num(work.jobId),
-            "labels" to Pj.arr(work.labels.map(Pj::str)),
+            "tool" to Pj.str(work.tool),
             "url" to Pj.str(work.url),
+            "surface" to Pj.str(work.surface.name.lowercase()),
+            "result" to Pj.str(work.result),
+            // Sorted so the manifest hash does not depend on map iteration order.
+            "params" to paramsJson(work.params),
         ),
     ).toString()
 
-    /** Null for an ordinary inline task, so old offers keep working. */
-    fun workSource(question: String): CvatWorkSource? {
+    /** Sorted, so the manifest hash never depends on map iteration order. */
+    private fun paramsJson(params: Map<String, String>): JsonObject =
+        JsonObject(params.toSortedMap().mapValues { Pj.str(it.value) })
+
+    /**
+     * Null for an ordinary inline task, so old offers keep working.
+     *
+     * Any tool is accepted, not just CVAT: a client that cannot work a tool
+     * should say so, not pretend the job does not exist.
+     */
+    fun workSource(question: String): WorkSource? {
         val work = runCatching { Pj.parse(question).o("work") }.getOrNull() ?: return null
-        if (runCatching { work.s("tool") }.getOrNull() != TOOL_CVAT) return null
         return runCatching {
-            CvatWorkSource(
-                baseUrl = work.s("base_url"),
-                org = work.s("org"),
-                taskId = work.l("task_id"),
-                jobId = work.l("job_id"),
-                labels = work.a("labels").map { it.jsonPrimitive.content },
+            WorkSource(
+                tool = work.s("tool"),
+                url = work.s("url"),
+                surface = WorkSurface.parse(work.sOrNull("surface")),
+                result = work.sOrNull("result") ?: WorkSource.RESULT_TAGS,
+                params = (work["params"] as? JsonObject).orEmpty()
+                    .mapValues { it.value.jsonPrimitive.content },
             )
         }.getOrNull()
     }
 
-    fun answer(completion: CvatCompletion): String = Pj.obj(
+    fun answer(completion: WorkCompletion): String = Pj.obj(
         "completed" to Pj.str("true"),
-        "cvat_job_id" to Pj.num(completion.cvatJobId),
-        "cvat_user_id" to Pj.num(completion.cvatUserId),
-        "annotations_sha256" to Pj.str(completion.annotationsSha256),
+        "ref" to Pj.str(completion.ref),
+        "result_sha256" to Pj.str(completion.resultSha256),
     ).toString()
 
-    fun completion(answer: String): CvatCompletion? {
+    fun completion(answer: String): WorkCompletion? {
         val parsed: JsonObject = runCatching { Pj.parse(answer) }.getOrNull() ?: return null
         return runCatching {
-            CvatCompletion(
-                cvatJobId = parsed.l("cvat_job_id"),
-                cvatUserId = parsed.l("cvat_user_id"),
-                annotationsSha256 = parsed.s("annotations_sha256"),
-            )
+            WorkCompletion(ref = parsed.s("ref"), resultSha256 = parsed.s("result_sha256"))
         }.getOrNull()
     }
 
     /**
-     * The bytes both sides hash. Frames ascending, then label; labels
-     * normalized exactly as [Validators.normalize] does, so a canonical
-     * annotation set and a validated answer cannot disagree over whitespace
-     * or case.
+     * The bytes both sides hash, for the named [form].
+     *
+     * The protocol's contract is only "deterministic bytes, computable
+     * identically by the worker on-device and by an independent recorder" —
+     * everything downstream treats the result as opaque. So each result form
+     * gets its own canonicaliser, and an unrecognised one fails loudly rather
+     * than hashing something arbitrary and withholding a payout later.
+     *
+     * This function is the one piece that must agree byte for byte with
+     * `ios/HpbCore/Sources/HpbCore/ExternalWork.swift`.
+     */
+    fun canonical(form: String, entries: List<Pair<Int, String>>): String = when (form) {
+        WorkSource.RESULT_TAGS -> canonicalAnnotations(entries)
+        else -> error("unsupported result form '$form'")
+    }
+
+    /**
+     * Tags: frames ascending, then label; labels normalized exactly as
+     * [Validators.normalize] does, so a canonical annotation set and a
+     * validated answer cannot disagree over whitespace or case.
      */
     fun canonicalAnnotations(tags: List<Pair<Int, String>>): String =
         tags.map { it.first to Validators.normalize(it.second) }
