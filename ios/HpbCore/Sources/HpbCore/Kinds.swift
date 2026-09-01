@@ -15,6 +15,9 @@ public enum ProtocolKinds {
     public static let cvatAccessRequest = 9570
     public static let cvatAccessGrant = 9571
     public static let cvatCommitment = 9572
+    public static let workDispatch = 9573
+    public static let workStatus = 9574
+    public static let workerTools = 33403
 
     public static let version = 1
 }

@@ -271,11 +271,13 @@ struct TaskCard: View {
     /// The labeler is a worker client here, not the labeling tool: the actual
     /// annotation happens in CVAT's own editor, which is where boxes, polygons
     /// and interpolation live.
-    private func externalCard(_ work: CvatWorkSource) -> some View {
+    private func externalCard(_ work: WorkSource) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(task.text).font(.system(size: 14)).foregroundColor(Palette.text)
-            Text("labels: \(work.labels.joined(separator: ", "))")
-                .font(.system(size: 12)).foregroundColor(Palette.dim)
+            if let labels = work.params["labels"], !labels.isEmpty {
+                Text("labels: \(labels.replacingOccurrences(of: ",", with: ", "))")
+                    .font(.system(size: 12)).foregroundColor(Palette.dim)
+            }
             if store.cvatReady.contains(job.escrowId), let url = URL(string: work.url) {
                 Link("Open in CVAT", destination: url)
                     .buttonStyle(AccentButton())

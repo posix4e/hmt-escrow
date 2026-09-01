@@ -14,7 +14,7 @@ final class WorkerStore: ObservableObject {
         let imageData: Data?
         let choices: [String]
         /// Set when the work lives in CVAT rather than in the offer.
-        let work: CvatWorkSource?
+        let work: WorkSource?
         var id: String { key }
     }
 
@@ -297,8 +297,11 @@ final class WorkerStore: ObservableObject {
         guard !external.isEmpty, let cvat, let privkey, let relayClient else { return [] }
         var answers = [Answer]()
         for (task, work) in external {
-            let labels = try await cvat.labels(jobId: work.jobId)
-            let canonical = try await cvat.canonicalAnnotations(jobId: work.jobId, labels: labels)
+            guard let unit = Int64(work.params["job_id"] ?? "") else {
+                throw CvatError.http(0, "work source names no cvat job")
+            }
+            let labels = try await cvat.labels(jobId: unit)
+            let canonical = try await cvat.canonicalAnnotations(jobId: unit, labels: labels)
             let hash = ExternalWork.hashOf(canonical)
 
             let commitment = try CvatCommitments.toEvent(
@@ -316,7 +319,7 @@ final class WorkerStore: ObservableObject {
                 Answer(
                     taskKey: task.key,
                     answer: ExternalWork.answer(
-                        CvatCompletion(cvatJobId: work.jobId, cvatUserId: 0, annotationsSha256: hash)
+                        WorkCompletion(ref: String(unit), resultSha256: hash)
                     )
                 )
             )
@@ -352,31 +355,42 @@ final class WorkerStore: ObservableObject {
     }
 }
 
-/// The worker key lives in the keychain; generated on first run.
+/// The worker key: this worker's identity, and the thing whose loss costs money.
+///
+/// It lives in the vault now. The legacy item is migrated on first read rather
+/// than abandoned — a worker that already has a key must keep it, because it is
+/// what their claims and unpaid earnings are addressed to.
 enum WorkerKey {
     static func load() throws -> [UInt8] {
+        if let stored = Vault.read(.workerKey) { return try stored.hexBytes() }
+        if let legacy = legacyKey() {
+            Vault.write(.workerKey, legacy)
+            return try legacy.hexBytes()
+        }
+        var fresh = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, fresh.count, &fresh) == errSecSuccess else {
+            throw VaultError.unavailable("no secure randomness")
+        }
+        guard Vault.write(.workerKey, fresh.hex) else {
+            throw VaultError.unavailable("could not store the worker key")
+        }
+        return fresh
+    }
+
+    /// The pre-vault item, written under a different service with no
+    /// accessibility class set.
+    private static func legacyKey() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "org.hpb.labeler",
-            kSecAttrAccount as String: "worker-key",
+            kSecAttrAccount as String: "worker.key",
             kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-           let data = item as? Data, data.count == 32 {
-            return Array(data)
-        }
-        var key = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, key.count, &key) == errSecSuccess else {
-            throw HpbError.invalid("no entropy")
-        }
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "org.hpb.labeler",
-            kSecAttrAccount as String: "worker-key",
-            kSecValueData as String: Data(key),
-        ]
-        SecItemAdd(add as CFDictionary, nil)
-        return key
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data
+        else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 }

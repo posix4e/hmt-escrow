@@ -1,4 +1,5 @@
 import Foundation
+import HpbCore
 import UIKit
 
 /// `--demo` fixture: one CVAT-style animals job driven entirely in memory,
@@ -62,7 +63,7 @@ enum DemoData {
     private static func task(_ key: String, _ text: String, ears: Ears) -> WorkerStore.TaskModel {
         WorkerStore.TaskModel(
             key: key, text: text, imageData: pictogram(ears: ears),
-            choices: ["cat", "dog"], work: nil
+            choices: ["cat", "dog"], work: WorkSource?.none
         )
     }
 

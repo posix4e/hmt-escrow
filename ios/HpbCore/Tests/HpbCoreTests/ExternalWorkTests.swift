@@ -6,12 +6,11 @@ import XCTest
 /// load-bearing part: this runs on a phone and the recording role re-hashes the
 /// same bytes on a server.
 final class ExternalWorkTests: XCTestCase {
-    private let work = CvatWorkSource(
-        baseUrl: "http://cvat.invalid",
-        org: "hpb",
-        taskId: 12,
-        jobId: 42,
-        labels: ["circle", "square", "triangle"]
+    private let work = WorkSource(
+        tool: "cvat",
+        url: "http://cvat.invalid/tasks/12/jobs/42",
+        surface: .desktop,
+        params: ["org": "hpb", "task_id": "12", "job_id": "42"]
     )
 
     func testWorkSourceRoundTripsThroughTheQuestion() {
@@ -25,24 +24,40 @@ final class ExternalWorkTests: XCTestCase {
         XCTAssertEqual("Annotate job 42", try Cj.parse(question).s("text"))
     }
 
-    func testBrowserUrlPointsAtTheCvatJob() {
-        XCTAssertEqual("http://cvat.invalid/tasks/12/jobs/42", work.url)
+    /// A client that has never heard of a tool must still get a usable link.
+    func testUnknownToolStillYieldsAWorkSource() {
+        let exotic = WorkSource(tool: "label-studio", url: "http://ls.invalid/1")
+        let parsed = ExternalWork.workSource(ExternalWork.question("Label it", exotic))
+        XCTAssertEqual("label-studio", parsed?.tool)
+        XCTAssertEqual("http://ls.invalid/1", parsed?.url)
+        XCTAssertEqual(.any, parsed?.surface, "an absent surface should not be desktop")
+    }
+
+    func testUnrecognisedSurfaceFallsBackToAny() {
+        XCTAssertEqual(.any, WorkSurface.parse("hologram"))
+        XCTAssertEqual(.desktop, WorkSurface.parse("DESKTOP"))
+    }
+
+    /// Hashing an unknown form would silently withhold a payout later.
+    func testUnsupportedResultFormReturnsNil() {
+        XCTAssertNil(ExternalWork.canonical("bounding-boxes", []))
     }
 
     func testInlineTaskIsNotMistakenForExternalWork() {
         XCTAssertNil(ExternalWork.workSource(#"{"text":"pick one","choices":["a","b"]}"#))
         XCTAssertNil(ExternalWork.workSource("just a plain question"))
-        XCTAssertNil(ExternalWork.workSource(#"{"work":{"tool":"labelstudio","base_url":"x"}}"#))
+        XCTAssertNil(ExternalWork.workSource(#"{"work":{"tool":"labelstudio"}}"#), "no url means no work source")
     }
 
     func testCompletionRoundTripsThroughTheAnswer() {
-        let completion = CvatCompletion(cvatJobId: 42, cvatUserId: 7, annotationsSha256: "abc123")
+        let completion = WorkCompletion(ref: "42", resultSha256: "abc123")
         XCTAssertEqual(completion, ExternalWork.completion(ExternalWork.answer(completion)))
     }
 
     func testPlainAnswerIsNotMistakenForACompletion() {
         XCTAssertNil(ExternalWork.completion("cat"))
         XCTAssertNil(ExternalWork.completion(#"{"completed":"true"}"#))
+        XCTAssertNil(ExternalWork.completion(#"{"ref":"42"}"#), "a completion without a hash is not one")
     }
 
     /// Whatever order CVAT hands them back, both sides must hash the same bytes.

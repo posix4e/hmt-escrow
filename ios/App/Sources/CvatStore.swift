@@ -22,7 +22,7 @@ final class CvatStore: ObservableObject {
     }
 
     init() {
-        token = Keychain.read(Self.tokenKey)
+        token = Vault.read(.toolCredential(tool: ExternalWork.toolCvat))
         signedIn = token != nil
     }
 
@@ -38,7 +38,7 @@ final class CvatStore: ObservableObject {
             ]))
             let data = try await send("POST", "/api/auth/login", body: body, token: nil)
             let key = try Cj.parse(String(decoding: data, as: UTF8.self)).s("key")
-            Keychain.write(Self.tokenKey, key)
+            Vault.write(.toolCredential(tool: ExternalWork.toolCvat), key)
             token = key
             // The launcher invites by address, so take it from CVAT rather than
             // asking for it again — an address that does not match the account
@@ -65,7 +65,7 @@ final class CvatStore: ObservableObject {
     }
 
     func signOut() {
-        Keychain.delete(Self.tokenKey)
+        Vault.delete(.toolCredential(tool: ExternalWork.toolCvat))
         token = nil
         status = "Signed out"
     }
@@ -125,7 +125,6 @@ final class CvatStore: ObservableObject {
         return data
     }
 
-    private static let tokenKey = "cvat.token"
 
     /// Cookie-free on purpose.
     ///
@@ -146,37 +145,4 @@ final class CvatStore: ObservableObject {
 enum CvatError: Error {
     case badUrl
     case http(Int, String)
-}
-
-/// Small Keychain wrapper — the CVAT token is a credential, not a preference,
-/// so it does not belong in UserDefaults next to the relay list.
-enum Keychain {
-    static func read(_ account: String) -> String? {
-        var query = base(account)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    static func write(_ account: String, _ value: String) {
-        delete(account)
-        var query = base(account)
-        query[kSecValueData as String] = Data(value.utf8)
-        SecItemAdd(query as CFDictionary, nil)
-    }
-
-    static func delete(_ account: String) {
-        SecItemDelete(base(account) as CFDictionary)
-    }
-
-    private static func base(_ account: String) -> [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "org.hpb.app",
-            kSecAttrAccount as String: account,
-        ]
-    }
 }
